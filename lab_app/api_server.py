@@ -221,7 +221,7 @@ class TestScriptRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    conversation_history: Optional[List[Dict[str, str]]] = None
+    conversation_history: Optional[List[Dict[str, Any]]] = None
 
 
 class EquipmentUsageCreate(BaseModel):
@@ -2378,11 +2378,62 @@ async def gemini_chat(request: ChatRequest):
         assistant = get_gemini()
         from fastapi.responses import StreamingResponse
         
+        # Save user message to database before streaming
+        session_id = 'default'
+        try:
+            db.save_ai_chat_message(session_id, 'user', request.message)
+        except Exception as e:
+            print(f"Warning: Failed to save user message: {e}")
+        
         def generate():
-            for chunk in assistant.chat(request.message, request.conversation_history):
-                yield chunk
+            try:
+                full_response = ""
+                for chunk in assistant.chat(request.message, request.conversation_history):
+                    full_response += chunk
+                    yield chunk
+                
+                # Save model response to database after streaming
+                try:
+                    db.save_ai_chat_message(session_id, 'model', full_response)
+                except Exception as e:
+                    print(f"Warning: Failed to save model response: {e}")
+            except Exception as e:
+                yield f"Error generating response: {str(e)}"
         
         return StreamingResponse(generate(), media_type="text/plain")
+    except Exception as e:
+        import traceback
+        error_detail = f"{str(e)}\n{traceback.format_exc()}"
+        print(f"Error in /api/ai/chat: {error_detail}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/ai/chat-history")
+async def get_chat_history(session_id: str = "default", project_id: Optional[int] = None, experiment_id: Optional[int] = None):
+    """Get AI chat history for a session."""
+    try:
+        history = db.get_ai_chat_history(session_id, project_id, experiment_id)
+        return {"success": True, "data": history}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/ai/chat-history")
+async def delete_chat_history(session_id: str):
+    """Delete AI chat history for a session."""
+    try:
+        success = db.delete_ai_chat_history(session_id)
+        return {"success": True, "deleted": success}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/ai/chat-sessions")
+async def get_chat_sessions():
+    """Get all unique chat session IDs with metadata."""
+    try:
+        sessions = db.get_ai_chat_sessions()
+        return {"success": True, "data": sessions}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

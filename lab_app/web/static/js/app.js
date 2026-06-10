@@ -5488,7 +5488,25 @@ async function diagnoseFailure(observation) {
     output.innerHTML = '<div class="ai-loading">Analyzing failure...</div>';
     
     try {
-        const experimentHistory = []; // TODO: Fetch recent experiment history
+        // Fetch recent experiment history
+        let experimentHistory = [];
+        try {
+            const logsResponse = await apiFetch('/api/logs?limit=10&offset=0');
+            if (logsResponse && logsResponse.data) {
+                experimentHistory = logsResponse.data.map(log => ({
+                    experiment_title: log.title,
+                    experiment_outcome: log.outcome,
+                    experiment_details: log.details,
+                    stage_name: log.stage_name,
+                    stage_goals: log.stage_goals,
+                    status: log.status
+                }));
+            }
+        } catch (e) {
+            console.warn('Failed to fetch experiment history:', e);
+            // Continue with empty history if fetch fails
+        }
+        
         const response = await fetch('/api/ai/diagnose-failure', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -5574,6 +5592,127 @@ async function generateTestScript(requirement, language = 'python') {
     } catch (error) {
         output.innerHTML = `<div class="ai-response-text" style="color: var(--accent-red);">Error: ${error.message}</div>`;
         showAlert('Failed to generate script', 'Error');
+    }
+}
+
+async function exportChatToNotebook(button) {
+    const messageDiv = button.closest('.chat-message');
+    const rawResponse = messageDiv.dataset.rawResponse;
+    
+    if (!rawResponse) {
+        showAlert('No response to export', 'Error');
+        return;
+    }
+    
+    // Fetch existing notebook entries
+    let notebookEntries = [];
+    try {
+        const response = await apiFetch('/api/notebook?limit=100');
+        if (response && response.data) {
+            notebookEntries = response.data;
+        }
+    } catch (e) {
+        console.warn('Failed to fetch notebook entries:', e);
+    }
+    
+    // Create notebook entry options
+    const entryOptions = notebookEntries.map(entry => ({
+        value: entry.id.toString(),
+        label: entry.title || `Entry #${entry.id}`
+    }));
+    
+    // Add "Create new entry" option
+    entryOptions.unshift({ value: 'new', label: 'Create new entry...' });
+    
+    showModal({
+        type: 'multi',
+        title: 'Export to Notebook',
+        message: 'Select a notebook entry to append this response to:',
+        fields: [
+            { 
+                name: 'entry_id', 
+                label: 'Notebook Entry', 
+                type: 'select', 
+                options: entryOptions,
+                defaultValue: 'new'
+            },
+            {
+                name: 'new_title',
+                label: 'New Entry Title',
+                type: 'text',
+                defaultValue: '',
+                placeholder: 'Enter title if creating new entry...',
+                condition: (values) => values.entry_id === 'new'
+            }
+        ],
+        callback: async (values) => {
+            if (values) {
+                await performExportToNotebook(rawResponse, values);
+            }
+        }
+    });
+}
+
+async function performExportToNotebook(content, values) {
+    try {
+        let entryId;
+        
+        if (values.entry_id === 'new') {
+            // Create new notebook entry with proper markdown formatting
+            const newEntryData = {
+                title: values.new_title || 'AI Chat Export',
+                content: content,
+                entry_type: 'text',
+                project_id: currentProjectId || null,
+                experiment_id: currentExperimentId || null
+            };
+            
+            const response = await apiFetch('/api/notebook', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newEntryData)
+            });
+            
+            const data = await response.json();
+            
+            // Check if entry was created successfully (API returns {id, message})
+            if (data && data.id) {
+                showAlert('Created new notebook entry with AI response', 'Success');
+            } else {
+                throw new Error('Failed to create notebook entry');
+            }
+        } else {
+            // Append to existing entry
+            const existingEntryResponse = await apiFetch(`/api/notebook/${values.entry_id}`);
+            const existingEntry = await existingEntryResponse.json();
+            
+            if (existingEntry && existingEntry.data) {
+                // Preserve existing content and append with proper markdown formatting
+                const separator = '\n\n---\n\n';
+                const header = '**AI Chat Response:**\n\n';
+                const updatedContent = existingEntry.data.content + separator + header + content;
+                
+                const updateResponse = await apiFetch(`/api/notebook/${values.entry_id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: updatedContent })
+                });
+                
+                const updateData = await updateResponse.json();
+                
+                // Check if update was successful (API returns {success: true} or similar)
+                if (updateResponse.ok) {
+                    showAlert('Appended AI response to notebook entry', 'Success');
+                } else {
+                    throw new Error('Failed to update notebook entry');
+                }
+            } else {
+                throw new Error('Failed to fetch existing notebook entry');
+            }
+        }
+    } catch (error) {
+        console.error('Error exporting to notebook:', error);
+        showAlert('Failed to export to notebook: ' + error.message, 'Error');
     }
 }
 
@@ -7632,6 +7771,139 @@ function handleAIInput(event) {
 
 // Conversation history for AI chat
 let aiConversationHistory = [];
+let aiSessionId = 'default';
+
+async function loadChatHistory() {
+    try {
+        const response = await apiFetch(`/api/ai/chat-history?session_id=${aiSessionId}`);
+        const data = await response.json();
+        
+        // Always clear the container first
+        const container = document.getElementById('ai-chat-container');
+        container.innerHTML = '';
+        
+        // Clear conversation history
+        aiConversationHistory = [];
+        
+        if (data && data.data && data.data.length > 0) {
+            // Load messages from database
+            data.data.forEach(msg => {
+                // Add to conversation history in Gemini format
+                if (msg.role === 'user' || msg.role === 'model') {
+                    aiConversationHistory.push({ role: msg.role, parts: [msg.content] });
+                }
+                
+                // Display message in chat interface
+                addAIMessage(msg.content, msg.role === 'user' ? 'user' : 'assistant');
+            });
+        } else {
+            // Show default welcome message if no history
+            showDefaultWelcomeMessage();
+        }
+    } catch (e) {
+        console.warn('Failed to load chat history:', e);
+        // Show default welcome message on error
+        showDefaultWelcomeMessage();
+    }
+}
+
+function showDefaultWelcomeMessage() {
+    const container = document.getElementById('ai-chat-container');
+    const assistantAvatar = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+    </svg>`;
+    
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'chat-message assistant';
+    messageDiv.innerHTML = `
+        <div class="chat-avatar assistant-avatar">${assistantAvatar}</div>
+        <div class="chat-content">
+            <div class="chat-bubble assistant-bubble">
+                <p>Hello! I'm your AI research assistant. Ask me anything about your lab data, projects, or experiments.</p>
+            </div>
+            <div class="chat-time">Just now</div>
+        </div>
+    `;
+    container.appendChild(messageDiv);
+}
+
+async function startNewChat() {
+    // Generate a new session ID
+    const newSessionId = 'session_' + Date.now();
+    
+    // Switch to new session
+    aiSessionId = newSessionId;
+    
+    // Clear conversation history
+    aiConversationHistory = [];
+    
+    // Clear chat container and show welcome message
+    const container = document.getElementById('ai-chat-container');
+    container.innerHTML = '';
+    showDefaultWelcomeMessage();
+    
+    showAlert('Started new chat session', 'Success');
+}
+
+async function showChatSessions() {
+    try {
+        const response = await apiFetch('/api/ai/chat-sessions');
+        const data = await response.json();
+        
+        if (!data || !data.data || data.data.length === 0) {
+            showAlert('No previous chat sessions found', 'Info');
+            return;
+        }
+        
+        const sessions = data.data;
+        
+        // Create session options for modal
+        const sessionOptions = sessions.map(session => ({
+            value: session.session_id,
+            label: `Chat (${new Date(session.last_message).toLocaleString()}) - ${session.message_count} messages`
+        }));
+        
+        // Add current session if it's not in the list
+        if (!sessions.find(s => s.session_id === aiSessionId) && aiConversationHistory.length > 0) {
+            sessionOptions.unshift({
+                value: aiSessionId,
+                label: `Current Session - ${aiConversationHistory.length} messages`
+            });
+        }
+        
+        showModal({
+            type: 'multi',
+            title: 'Chat History',
+            message: 'Select a previous chat session to load:',
+            fields: [
+                { 
+                    name: 'session_id', 
+                    label: 'Previous Sessions', 
+                    type: 'select', 
+                    options: sessionOptions
+                }
+            ],
+            callback: async (values) => {
+                if (values && values.session_id) {
+                    await switchToSession(values.session_id);
+                }
+            }
+        });
+    } catch (e) {
+        console.error('Error loading chat sessions:', e);
+        showAlert('Failed to load chat sessions', 'Error');
+    }
+}
+
+async function switchToSession(sessionId) {
+    // Switch to selected session
+    aiSessionId = sessionId;
+    
+    // Load chat history for the selected session
+    await loadChatHistory();
+    
+    showAlert('Switched to chat session', 'Success');
+}
 
 function sendAIMessage() {
     const input = document.getElementById('ai-input');
@@ -7641,7 +7913,7 @@ function sendAIMessage() {
         input.value = '';
         input.style.height = 'auto';
         
-        // Add to conversation history
+        // Add to conversation history (without session_id for Gemini API)
         aiConversationHistory.push({ role: 'user', parts: [message] });
         
         // Call Gemini API with streaming
@@ -7668,6 +7940,17 @@ async function fetchGeminiChat(message, conversationHistory) {
             <div class="chat-bubble assistant-bubble">
                 <p class="ai-streaming-text">Thinking...</p>
             </div>
+            <div class="chat-actions">
+                <button class="chat-action-btn" onclick="exportChatToNotebook(this)" title="Export to Notebook">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                </button>
+            </div>
             <div class="chat-time">${time}</div>
         </div>
     `;
@@ -7689,7 +7972,8 @@ async function fetchGeminiChat(message, conversationHistory) {
         });
         
         if (!response.ok) {
-            throw new Error('Failed to get AI response');
+            const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+            throw new Error(errorData.detail || 'Failed to get AI response');
         }
         
         streamingText.textContent = '';
@@ -7706,6 +7990,14 @@ async function fetchGeminiChat(message, conversationHistory) {
             streamingText.textContent = fullResponse;
             container.scrollTop = container.scrollHeight;
         }
+        
+        // Convert markdown to HTML after streaming is complete
+        if (typeof marked !== 'undefined') {
+            streamingText.innerHTML = marked.parse(fullResponse);
+        }
+        
+        // Store the raw response for export
+        messageDiv.dataset.rawResponse = fullResponse;
         
         // Add to conversation history
         aiConversationHistory.push({ role: 'model', parts: [fullResponse] });
@@ -9030,4 +9322,5 @@ document.getElementById('global-search-input').addEventListener('keypress', (e) 
 // Initialize dashboard on load
 document.addEventListener('DOMContentLoaded', () => {
     loadDashboard();
+    loadChatHistory();
 });

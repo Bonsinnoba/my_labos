@@ -30,7 +30,7 @@ class CacheDatabase:
     def _initialize_database(self) -> None:
         """Create database tables if they don't exist."""
         try:
-            self.conn = sqlite3.connect(self.db_path)
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             self.conn.row_factory = sqlite3.Row  # Enable dictionary-like access
             
             cursor = self.conn.cursor()
@@ -713,6 +713,19 @@ class CacheDatabase:
             )
         """)
         
+        # AI Chat History table - store chat conversations
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ai_chat_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                project_id INTEGER,
+                experiment_id INTEGER
+            )
+        """)
+        
         # Create index for asset_sync_log
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_asset_sync_log_timestamp 
@@ -723,6 +736,12 @@ class CacheDatabase:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_knowledge_vault_project 
             ON knowledge_vault(project_id)
+        """)
+        
+        # Create index for ai_chat_history
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ai_chat_history_session 
+            ON ai_chat_history(session_id)
         """)
         
         cursor.execute("""
@@ -3339,6 +3358,81 @@ class CacheDatabase:
             return cursor.rowcount
         except sqlite3.Error as e:
             print(f"Error deleting old activities: {e}")
+            raise
+    
+    def save_ai_chat_message(self, session_id: str, role: str, content: str,
+                            project_id: Optional[int] = None, experiment_id: Optional[int] = None) -> int:
+        """Save an AI chat message to the history."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO ai_chat_history (session_id, role, content, project_id, experiment_id)
+                VALUES (?, ?, ?, ?, ?)
+            """, (session_id, role, content, project_id, experiment_id))
+            self.conn.commit()
+            return cursor.lastrowid
+        except sqlite3.Error as e:
+            print(f"Error saving AI chat message: {e}")
+            raise
+    
+    def get_ai_chat_history(self, session_id: str, project_id: Optional[int] = None,
+                           experiment_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Get AI chat history for a session."""
+        try:
+            cursor = self.conn.cursor()
+            if project_id is not None:
+                cursor.execute("""
+                    SELECT * FROM ai_chat_history
+                    WHERE session_id = ? AND project_id = ?
+                    ORDER BY timestamp ASC
+                """, (session_id, project_id))
+            elif experiment_id is not None:
+                cursor.execute("""
+                    SELECT * FROM ai_chat_history
+                    WHERE session_id = ? AND experiment_id = ?
+                    ORDER BY timestamp ASC
+                """, (session_id, experiment_id))
+            else:
+                cursor.execute("""
+                    SELECT * FROM ai_chat_history
+                    WHERE session_id = ?
+                    ORDER BY timestamp ASC
+                """, (session_id,))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            print(f"Error retrieving AI chat history: {e}")
+            raise
+    
+    def delete_ai_chat_history(self, session_id: str) -> bool:
+        """Delete AI chat history for a session."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM ai_chat_history WHERE session_id = ?", (session_id,))
+            self.conn.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            print(f"Error deleting AI chat history: {e}")
+            raise
+    
+    def get_ai_chat_sessions(self) -> List[Dict[str, Any]]:
+        """Get all unique chat session IDs with metadata."""
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT 
+                    session_id,
+                    COUNT(*) as message_count,
+                    MIN(timestamp) as first_message,
+                    MAX(timestamp) as last_message
+                FROM ai_chat_history
+                GROUP BY session_id
+                ORDER BY last_message DESC
+            """)
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            print(f"Error retrieving AI chat sessions: {e}")
             raise
 
 

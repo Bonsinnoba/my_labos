@@ -9,8 +9,8 @@ from typing import Dict, List, Any, Generator
 
 # Optional import - will fail gracefully if SDK not installed
 try:
-    from google import genai
-    from google.genai import types
+    import google.generativeai as genai
+    from google.generativeai import types
     GENAI_AVAILABLE = True
 except ImportError:
     GENAI_AVAILABLE = False
@@ -37,7 +37,7 @@ class GeminiLabAssistant:
         
         genai.configure(api_key=self.api_key)
         self.model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-3.5-flash",
             system_instruction=self._get_system_instruction()
         )
     
