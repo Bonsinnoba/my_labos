@@ -145,7 +145,8 @@ class KnowledgeVault:
     
     def add_document(self, source_path: str, title: str, description: Optional[str] = None,
                     tags: Optional[List[str]] = None, project_id: Optional[int] = None,
-                    component_id: Optional[int] = None, equipment_id: Optional[int] = None) -> int:
+                    component_id: Optional[int] = None, equipment_id: Optional[int] = None,
+                    experiment_id: Optional[int] = None, stage_id: Optional[int] = None) -> int:
         """
         Add a document to the knowledge vault.
         
@@ -157,6 +158,8 @@ class KnowledgeVault:
             project_id: Associated project ID
             component_id: Associated component ID
             equipment_id: Associated equipment ID
+            experiment_id: Associated experiment ID
+            stage_id: Associated experiment stage ID
             
         Returns:
             The ID of the inserted document
@@ -195,7 +198,9 @@ class KnowledgeVault:
             tags=tags_str,
             project_id=project_id,
             component_id=component_id,
-            equipment_id=equipment_id
+            equipment_id=equipment_id,
+            experiment_id=experiment_id,
+            stage_id=stage_id
         )
         
         print(f"✅ Document added to vault: {title} (ID: {doc_id})")
@@ -217,7 +222,8 @@ class KnowledgeVault:
         return doc
     
     def search_documents(self, query: str, project_id: Optional[int] = None,
-                        file_type: Optional[str] = None, tags: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+                        file_type: Optional[str] = None, tags: Optional[List[str]] = None,
+                        experiment_id: Optional[int] = None, stage_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Search documents by query, project, type, or tags.
         
@@ -226,12 +232,19 @@ class KnowledgeVault:
             project_id: Filter by project ID
             file_type: Filter by file type
             tags: Filter by tags
+            experiment_id: Filter by experiment ID
+            stage_id: Filter by stage ID
             
         Returns:
             List of matching documents
         """
         # Get base documents
-        docs = self.db.get_all_documents(project_id=project_id, file_type=file_type)
+        docs = self.db.get_all_documents(
+            project_id=project_id,
+            file_type=file_type,
+            experiment_id=experiment_id,
+            stage_id=stage_id
+        )
         
         # Filter by query
         if query:

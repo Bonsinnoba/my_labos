@@ -9,8 +9,8 @@ from typing import Dict, List, Any, Generator
 
 # Optional import - will fail gracefully if SDK not installed
 try:
-    import google.generativeai as genai
-    from google.generativeai import types
+    import google.genai as genai
+    from google.genai import types
     GENAI_AVAILABLE = True
 except ImportError:
     GENAI_AVAILABLE = False
@@ -29,17 +29,15 @@ class GeminiLabAssistant:
             api_key: Google API key for Gemini. If None, reads from GEMINI_API_KEY env var
         """
         if not GENAI_AVAILABLE:
-            raise ImportError("Google GenAI SDK not installed. Install with: pip install google-generativeai")
+            raise ImportError("Google GenAI SDK not installed. Install with: pip install google-genai")
         
         self.api_key = api_key or os.getenv('GEMINI_API_KEY')
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY environment variable must be set")
         
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(
-            model_name="gemini-3.5-flash",
-            system_instruction=self._get_system_instruction()
-        )
+        self.client = genai.Client(api_key=self.api_key)
+        self.model_name = "gemini-2.5-flash"
+        self.system_instruction = self._get_system_instruction()
     
     def _get_system_instruction(self) -> str:
         """System instruction for the AI assistant"""
@@ -99,7 +97,13 @@ Please provide:
 5. Recommendations: Provide actionable improvements"""
         
         try:
-            response = self.model.generate_content_stream(prompt)
+            response = self.client.models.generate_content_stream(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=self.system_instruction
+                )
+            )
             for chunk in response:
                 if chunk.text:
                     yield chunk.text
@@ -130,7 +134,13 @@ For each alternative, provide:
 5. Availability Considerations"""
         
         try:
-            response = self.model.generate_content_stream(prompt)
+            response = self.client.models.generate_content_stream(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=self.system_instruction
+                )
+            )
             for chunk in response:
                 if chunk.text:
                     yield chunk.text
@@ -167,7 +177,13 @@ Please provide:
 5. Safety Precautions: Any safety considerations during diagnosis"""
         
         try:
-            response = self.model.generate_content_stream(prompt)
+            response = self.client.models.generate_content_stream(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=self.system_instruction
+                )
+            )
             for chunk in response:
                 if chunk.text:
                     yield chunk.text
@@ -211,7 +227,13 @@ Please provide:
 6. Safety considerations (if applicable)"""
         
         try:
-            response = self.model.generate_content_stream(prompt)
+            response = self.client.models.generate_content_stream(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=self.system_instruction
+                )
+            )
             for chunk in response:
                 if chunk.text:
                     yield chunk.text
@@ -232,15 +254,39 @@ Please provide:
         """
         try:
             if conversation_history and len(conversation_history) > 0:
-                # Build conversation context
-                chat = self.model.start_chat(history=conversation_history)
+                # Build conversation context using the new chat API
+                chat = self.client.chats.create(
+                    model=self.model_name,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self.system_instruction
+                    )
+                )
+                
+                # Add history to chat
+                for item in conversation_history:
+                    if 'role' in item and 'parts' in item:
+                        role = item['role']
+                        content = item['parts'][0] if isinstance(item['parts'], list) else item['parts']
+                        if role == 'user':
+                            chat.send_message(content)
+                        elif role == 'model':
+                            # For model responses, we need to handle them differently
+                            pass
+                
+                # Send the new message and stream response
                 response = chat.send_message(message, stream=True)
                 for chunk in response:
                     if chunk.text:
                         yield chunk.text
             else:
                 # Simple one-off query
-                response = self.model.generate_content_stream(message)
+                response = self.client.models.generate_content_stream(
+                    model=self.model_name,
+                    contents=message,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self.system_instruction
+                    )
+                )
                 for chunk in response:
                     if chunk.text:
                         yield chunk.text

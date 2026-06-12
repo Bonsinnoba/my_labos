@@ -56,6 +56,7 @@ class CacheDatabase:
                     status TEXT NOT NULL DEFAULT 'Active',
                     start_date TEXT,
                     summary_findings TEXT,
+                    project_outcome TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -125,6 +126,18 @@ class CacheDatabase:
             
             # Create Phase 4 tables
             self._create_phase4_tables(cursor)
+
+            # Migration: Rename summary_findings -> project_outcome on projects
+            self._migrate_projects_rename_summary_findings(cursor)
+
+            # Migration: Add conclusion column to rd_logs
+            self._migrate_rd_logs_add_conclusion(cursor)
+
+            # Migration: Add stage_id to findings table
+            self._migrate_findings_add_stage_id(cursor)
+
+            # Migration: Add experiment_id and stage_id to knowledge_vault
+            self._migrate_knowledge_vault_add_exp_stage(cursor)
             
             self.conn.commit()
             print(f"Database initialized successfully at: {os.path.abspath(self.db_path)}")
@@ -332,6 +345,8 @@ class CacheDatabase:
                 project_id INTEGER,
                 component_id INTEGER,
                 equipment_id INTEGER,
+                experiment_id INTEGER,
+                stage_id INTEGER,
                 upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_accessed TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL,
@@ -404,6 +419,7 @@ class CacheDatabase:
                 recommendations TEXT,
                 project_id INTEGER,
                 experiment_id INTEGER,
+                stage_id INTEGER,
                 severity TEXT DEFAULT 'medium',
                 status TEXT DEFAULT 'open',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1103,7 +1119,8 @@ class CacheDatabase:
                    outcome: str = 'PENDING',
                    expected_outcome: Optional[str] = None,
                    actual_outcome: Optional[str] = None,
-                   findings: Optional[str] = None) -> int:
+                   findings: Optional[str] = None,
+                   conclusion: Optional[str] = None) -> int:
         """
         Add a new R&D log entry to the database.
 
@@ -1114,10 +1131,11 @@ class CacheDatabase:
             cloud_file_url: URL to cloud storage for heavy attachments
             is_downloaded_locally: Whether the heavy attachment is downloaded locally
             project_id: Optional project ID to link the log
-            outcome: Experiment result — PENDING, PASS, or FAIL
+            outcome: Experiment result status — PENDING, PASS, or FAIL
             expected_outcome: Expected outcome of the experiment
             actual_outcome: Actual outcome of the experiment
-            findings: Experiment findings
+            findings: Ongoing observations/findings during the experiment
+            conclusion: Final narrative conclusion of the experiment
 
         Returns:
             The ID of the inserted log entry
@@ -1127,10 +1145,12 @@ class CacheDatabase:
             cursor.execute("""
                 INSERT INTO rd_logs
                     (project_name, project_id, stage_id, log_title, log_text,
-                     cloud_file_url, is_downloaded_locally, outcome, expected_outcome, actual_outcome, findings)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     cloud_file_url, is_downloaded_locally, outcome, expected_outcome,
+                     actual_outcome, findings, conclusion)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (project_name, project_id, stage_id, log_title, log_text,
-                   cloud_file_url, int(is_downloaded_locally), outcome.upper(), expected_outcome, actual_outcome, findings))
+                   cloud_file_url, int(is_downloaded_locally), outcome.upper(),
+                   expected_outcome, actual_outcome, findings, conclusion))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:
@@ -1405,6 +1425,82 @@ class CacheDatabase:
         except sqlite3.Error as e:
             print(f"[db] Migration warning (usage_logs): {e}")
 
+    def _migrate_projects_rename_summary_findings(self, cursor: sqlite3.Cursor) -> None:
+        """Rename summary_findings column to project_outcome on projects table."""
+        try:
+            cursor.execute("PRAGMA table_info(projects)")
+            cols = [c[1] for c in cursor.fetchall()]
+            if 'project_outcome' not in cols and 'summary_findings' in cols:
+                print("[db] Migrating projects: renaming summary_findings -> project_outcome...")
+                cursor.execute("ALTER TABLE projects ADD COLUMN project_outcome TEXT")
+                cursor.execute("UPDATE projects SET project_outcome = summary_findings WHERE summary_findings IS NOT NULL")
+                print("[db] Migration complete: project_outcome column added and populated")
+            elif 'project_outcome' not in cols:
+                print("[db] Migrating projects: adding project_outcome column...")
+                cursor.execute("ALTER TABLE projects ADD COLUMN project_outcome TEXT")
+                print("[db] Migration complete: project_outcome column added")
+            else:
+                print("[db] projects table already has project_outcome column")
+        except sqlite3.Error as e:
+            print(f"[db] Migration warning (project_outcome): {e}")
+
+    def _migrate_rd_logs_add_conclusion(self, cursor: sqlite3.Cursor) -> None:
+        """Add conclusion column to rd_logs for the final experiment narrative."""
+        try:
+            cursor.execute("PRAGMA table_info(rd_logs)")
+            cols = [c[1] for c in cursor.fetchall()]
+            if 'conclusion' not in cols:
+                print("[db] Migrating rd_logs: adding conclusion column...")
+                cursor.execute("ALTER TABLE rd_logs ADD COLUMN conclusion TEXT")
+                print("[db] Migration complete: conclusion column added to rd_logs")
+            else:
+                print("[db] rd_logs already has conclusion column")
+        except sqlite3.Error as e:
+            print(f"[db] Migration warning (conclusion): {e}")
+
+    def _migrate_findings_add_stage_id(self, cursor: sqlite3.Cursor) -> None:
+        """Add stage_id FK to findings so findings can be scoped to an experiment stage."""
+        try:
+            cursor.execute("PRAGMA table_info(findings)")
+            cols = [c[1] for c in cursor.fetchall()]
+            if 'stage_id' not in cols:
+                print("[db] Migrating findings: adding stage_id column...")
+                cursor.execute("ALTER TABLE findings ADD COLUMN stage_id INTEGER")
+                try:
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_findings_stage ON findings(stage_id)")
+                except sqlite3.Error:
+                    pass
+                print("[db] Migration complete: stage_id added to findings")
+            else:
+                print("[db] findings already has stage_id column")
+        except sqlite3.Error as e:
+            print(f"[db] Migration warning (findings stage_id): {e}")
+
+    def _migrate_knowledge_vault_add_exp_stage(self, cursor: sqlite3.Cursor) -> None:
+        """Add experiment_id and stage_id to knowledge_vault for tighter scoping."""
+        try:
+            cursor.execute("PRAGMA table_info(knowledge_vault)")
+            cols = [c[1] for c in cursor.fetchall()]
+            if 'experiment_id' not in cols:
+                print("[db] Migrating knowledge_vault: adding experiment_id column...")
+                cursor.execute("ALTER TABLE knowledge_vault ADD COLUMN experiment_id INTEGER")
+                print("[db] Migration complete: experiment_id added to knowledge_vault")
+            else:
+                print("[db] knowledge_vault already has experiment_id column")
+            if 'stage_id' not in cols:
+                print("[db] Migrating knowledge_vault: adding stage_id column...")
+                cursor.execute("ALTER TABLE knowledge_vault ADD COLUMN stage_id INTEGER")
+                try:
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_kv_experiment ON knowledge_vault(experiment_id)")
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_kv_stage ON knowledge_vault(stage_id)")
+                except sqlite3.Error:
+                    pass
+                print("[db] Migration complete: stage_id added to knowledge_vault")
+            else:
+                print("[db] knowledge_vault already has stage_id column")
+        except sqlite3.Error as e:
+            print(f"[db] Migration warning (knowledge_vault exp/stage): {e}")
+
     # Note: `get_all_experiment_stages` with `limit`/`offset` is defined earlier
     # to support server-side pagination. Do not redefine it here.
 
@@ -1556,8 +1652,8 @@ class CacheDatabase:
         
         Args:
             log_id: The log ID to update
-            **kwargs: Fields to update (project_name, log_title, log_text, 
-                      cloud_file_url, is_downloaded_locally)
+            **kwargs: Fields to update (project_name, log_title, log_text,
+                      cloud_file_url, is_downloaded_locally, conclusion, etc.)
             
         Returns:
             True if update was successful, False otherwise
@@ -1569,8 +1665,13 @@ class CacheDatabase:
             # Build dynamic update query
             fields = []
             values = []
+            allowed_text = [
+                'project_name', 'project_id', 'log_title', 'log_text', 'cloud_file_url',
+                'outcome', 'stage_id', 'expected_outcome', 'actual_outcome', 'findings',
+                'outcome_attachments', 'findings_attachments', 'conclusion', 'status'
+            ]
             for key, value in kwargs.items():
-                if key in ['project_name', 'project_id', 'log_title', 'log_text', 'cloud_file_url', 'outcome', 'stage_id', 'expected_outcome', 'actual_outcome', 'findings', 'outcome_attachments', 'findings_attachments']:
+                if key in allowed_text:
                     fields.append(f"{key} = ?")
                     values.append(value.upper() if key == 'outcome' else value)
                 elif key == 'is_downloaded_locally':
@@ -1625,7 +1726,8 @@ class CacheDatabase:
     
     def add_project(self, name: str, description: Optional[str] = None, 
                    status: str = "Active", start_date: Optional[str] = None,
-                   summary_findings: Optional[str] = None) -> int:
+                   summary_findings: Optional[str] = None,
+                   project_outcome: Optional[str] = None) -> int:
         """
         Add a new project to the database.
         
@@ -1634,7 +1736,8 @@ class CacheDatabase:
             description: Project description
             status: Project status (Active, Completed, Paused)
             start_date: Project start date (ISO format string)
-            summary_findings: Summary of key findings
+            summary_findings: Legacy field (kept for compat)
+            project_outcome: The final outcome / conclusion of the project
             
         Returns:
             The ID of the inserted project
@@ -1645,9 +1748,9 @@ class CacheDatabase:
         try:
             cursor = self.conn.cursor()
             cursor.execute("""
-                INSERT INTO projects (name, description, status, start_date, summary_findings)
+                INSERT INTO projects (name, description, status, start_date, project_outcome)
                 VALUES (?, ?, ?, ?, ?)
-            """, (name, description, status, start_date, summary_findings))
+            """, (name, description, status, start_date, project_outcome or summary_findings))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.IntegrityError:
@@ -1727,7 +1830,8 @@ class CacheDatabase:
         
         Args:
             project_id: The project ID to update
-            **kwargs: Fields to update (name, description, status, start_date, summary_findings)
+            **kwargs: Fields to update (name, description, status, start_date,
+                      project_outcome, summary_findings[legacy])
             
         Returns:
             True if update was successful, False otherwise
@@ -1738,9 +1842,12 @@ class CacheDatabase:
             
             fields = []
             values = []
+            allowed = ['name', 'description', 'status', 'start_date', 'project_outcome', 'summary_findings']
             for key, value in kwargs.items():
-                if key in ['name', 'description', 'status', 'start_date', 'summary_findings']:
-                    fields.append(f"{key} = ?")
+                if key in allowed:
+                    # Transparently map legacy summary_findings to project_outcome
+                    col = 'project_outcome' if key == 'summary_findings' else key
+                    fields.append(f"{col} = ?")
                     values.append(value)
             
             if not fields:
@@ -1803,13 +1910,111 @@ class CacheDatabase:
             print(f"Error linking log to project: {e}")
             raise
     
-    # Knowledge Vault CRUD Operations
+    def get_project_usage_summary(self, project_id: int) -> List[Dict[str, Any]]:
+        """
+        Get deduplicated and summed resource usage for a project.
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT entity_type, entity_id, SUM(quantity_used) as total_quantity, unit, MAX(timestamp) as last_used
+                FROM usage_logs
+                WHERE project_id = ?
+                GROUP BY entity_type, entity_id, unit
+            """, (project_id,))
+            rows = cursor.fetchall()
+            summary = []
+            for r in rows:
+                item = dict(r)
+                item['name'] = f"Unknown {item['entity_type']} #{item['entity_id']}"
+                item['details'] = ""
+                # Fetch human-readable name based on type
+                if item['entity_type'] == 'tool':
+                    cursor.execute("SELECT name, description FROM tools WHERE id = ?", (item['entity_id'],))
+                    res = cursor.fetchone()
+                    if res:
+                        item['name'] = res['name']
+                        item['details'] = res['description'] or ""
+                elif item['entity_type'] == 'material':
+                    cursor.execute("SELECT name, formula FROM materials WHERE id = ?", (item['entity_id'],))
+                    res = cursor.fetchone()
+                    if res:
+                        item['name'] = res['name']
+                        item['details'] = res['formula'] or ""
+                elif item['entity_type'] == 'equipment':
+                    cursor.execute("SELECT name, model FROM equipment WHERE id = ?", (item['entity_id'],))
+                    res = cursor.fetchone()
+                    if res:
+                        item['name'] = res['name']
+                        item['details'] = res['model'] or ""
+                elif item['entity_type'] == 'component':
+                    cursor.execute("SELECT name, part_number FROM components WHERE id = ?", (item['entity_id'],))
+                    res = cursor.fetchone()
+                    if res:
+                        item['name'] = res['name']
+                        item['details'] = res['part_number'] or ""
+                summary.append(item)
+            return summary
+        except sqlite3.Error as e:
+            print(f"Error getting project usage summary: {e}")
+            raise
+
+    def get_experiment_usage_summary(self, experiment_id: int) -> List[Dict[str, Any]]:
+        """
+        Get deduplicated and summed resource usage for an experiment.
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT entity_type, entity_id, SUM(quantity_used) as total_quantity, unit, MAX(timestamp) as last_used
+                FROM usage_logs
+                WHERE experiment_id = ?
+                GROUP BY entity_type, entity_id, unit
+            """, (experiment_id,))
+            rows = cursor.fetchall()
+            summary = []
+            for r in rows:
+                item = dict(r)
+                item['name'] = f"Unknown {item['entity_type']} #{item['entity_id']}"
+                item['details'] = ""
+                # Fetch human-readable name based on type
+                if item['entity_type'] == 'tool':
+                    cursor.execute("SELECT name, description FROM tools WHERE id = ?", (item['entity_id'],))
+                    res = cursor.fetchone()
+                    if res:
+                        item['name'] = res['name']
+                        item['details'] = res['description'] or ""
+                elif item['entity_type'] == 'material':
+                    cursor.execute("SELECT name, formula FROM materials WHERE id = ?", (item['entity_id'],))
+                    res = cursor.fetchone()
+                    if res:
+                        item['name'] = res['name']
+                        item['details'] = res['formula'] or ""
+                elif item['entity_type'] == 'equipment':
+                    cursor.execute("SELECT name, model FROM equipment WHERE id = ?", (item['entity_id'],))
+                    res = cursor.fetchone()
+                    if res:
+                        item['name'] = res['name']
+                        item['details'] = res['model'] or ""
+                elif item['entity_type'] == 'component':
+                    cursor.execute("SELECT name, part_number FROM components WHERE id = ?", (item['entity_id'],))
+                    res = cursor.fetchone()
+                    if res:
+                        item['name'] = res['name']
+                        item['details'] = res['part_number'] or ""
+                summary.append(item)
+            return summary
+        except sqlite3.Error as e:
+            print(f"Error getting experiment usage summary: {e}")
+            raise
+        # Knowledge Vault CRUD Operations
     
     def add_document(self, title: str, file_path: str, file_type: str,
                      file_size: Optional[int] = None, description: Optional[str] = None,
                      metadata: Optional[str] = None, tags: Optional[str] = None,
                      project_id: Optional[int] = None, component_id: Optional[int] = None,
-                     equipment_id: Optional[int] = None) -> int:
+                     equipment_id: Optional[int] = None, experiment_id: Optional[int] = None,
+                     stage_id: Optional[int] = None) -> int:
         """
         Add a document to the knowledge vault.
         
@@ -1824,6 +2029,8 @@ class CacheDatabase:
             project_id: Associated project ID
             component_id: Associated component ID
             equipment_id: Associated equipment ID
+            experiment_id: Associated experiment ID
+            stage_id: Associated experiment stage ID
             
         Returns:
             The ID of the inserted document
@@ -1833,10 +2040,10 @@ class CacheDatabase:
             cursor.execute("""
                 INSERT INTO knowledge_vault (title, file_path, file_type, file_size, 
                                            description, metadata, tags, project_id, 
-                                           component_id, equipment_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                           component_id, equipment_id, experiment_id, stage_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (title, file_path, file_type, file_size, description, metadata, 
-                  tags, project_id, component_id, equipment_id))
+                  tags, project_id, component_id, equipment_id, experiment_id, stage_id))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:
@@ -1855,7 +2062,9 @@ class CacheDatabase:
             raise
     
     def get_all_documents(self, project_id: Optional[int] = None,
-                         file_type: Optional[str] = None) -> List[Dict[str, Any]]:
+                          file_type: Optional[str] = None,
+                          experiment_id: Optional[int] = None,
+                          stage_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Retrieve all documents, optionally filtered."""
         try:
             cursor = self.conn.cursor()
@@ -1868,6 +2077,12 @@ class CacheDatabase:
             if file_type:
                 query += " AND file_type = ?"
                 params.append(file_type)
+            if experiment_id:
+                query += " AND experiment_id = ?"
+                params.append(experiment_id)
+            if stage_id:
+                query += " AND stage_id = ?"
+                params.append(stage_id)
             
             query += " ORDER BY upload_date DESC"
             cursor.execute(query, params)
@@ -2267,7 +2482,7 @@ class CacheDatabase:
                    root_cause: Optional[str] = None, solution: Optional[str] = None,
                    recommendations: Optional[str] = None, project_id: Optional[int] = None,
                    experiment_id: Optional[int] = None, severity: str = "medium",
-                   status: str = "open") -> int:
+                   status: str = "open", stage_id: Optional[int] = None) -> int:
         """
         Add a finding or lesson learned.
         
@@ -2282,6 +2497,7 @@ class CacheDatabase:
             experiment_id: Associated experiment ID
             severity: Severity level (low, medium, high, critical)
             status: Status (open, in_progress, resolved)
+            stage_id: Associated experiment stage ID
             
         Returns:
             The ID of the inserted finding
@@ -2290,10 +2506,10 @@ class CacheDatabase:
             cursor = self.conn.cursor()
             cursor.execute("""
                 INSERT INTO findings (title, finding_type, description, root_cause, solution,
-                                    recommendations, project_id, experiment_id, severity, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    recommendations, project_id, experiment_id, severity, status, stage_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (title, finding_type, description, root_cause, solution, 
-                  recommendations, project_id, experiment_id, severity, status))
+                  recommendations, project_id, experiment_id, severity, status, stage_id))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:
@@ -2312,7 +2528,8 @@ class CacheDatabase:
             raise
     
     def get_all_findings(self, project_id: Optional[int] = None, status: Optional[str] = None,
-                        severity: Optional[str] = None) -> List[Dict[str, Any]]:
+                        severity: Optional[str] = None, experiment_id: Optional[int] = None,
+                        stage_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Retrieve findings, optionally filtered."""
         try:
             cursor = self.conn.cursor()
@@ -2328,6 +2545,12 @@ class CacheDatabase:
             if severity:
                 query += " AND severity = ?"
                 params.append(severity)
+            if experiment_id:
+                query += " AND experiment_id = ?"
+                params.append(experiment_id)
+            if stage_id:
+                query += " AND stage_id = ?"
+                params.append(stage_id)
             
             query += " ORDER BY created_at DESC"
             cursor.execute(query, params)
@@ -2345,9 +2568,10 @@ class CacheDatabase:
             
             fields = []
             values = []
+            allowed = ['title', 'finding_type', 'description', 'root_cause', 
+                      'solution', 'recommendations', 'severity', 'status', 'project_id', 'experiment_id', 'stage_id']
             for key, value in kwargs.items():
-                if key in ['title', 'finding_type', 'description', 'root_cause', 
-                          'solution', 'recommendations', 'severity', 'status']:
+                if key in allowed:
                     fields.append(f"{key} = ?")
                     values.append(value)
                 elif key == 'resolved' and value:

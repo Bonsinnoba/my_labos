@@ -34,7 +34,7 @@ class FindingsManager:
                    root_cause: Optional[str] = None, solution: Optional[str] = None,
                    recommendations: Optional[str] = None, project_id: Optional[int] = None,
                    experiment_id: Optional[int] = None, severity: str = "medium",
-                   status: str = "open") -> int:
+                   status: str = "open", stage_id: Optional[int] = None) -> int:
         """
         Add a new finding or lesson learned.
         
@@ -49,6 +49,7 @@ class FindingsManager:
             experiment_id: Associated experiment ID
             severity: Severity level (low, medium, high, critical)
             status: Status (open, in_progress, resolved)
+            stage_id: Associated experiment stage ID
             
         Returns:
             The ID of the inserted finding
@@ -63,7 +64,8 @@ class FindingsManager:
             project_id=project_id,
             experiment_id=experiment_id,
             severity=severity,
-            status=status
+            status=status,
+            stage_id=stage_id
         )
         
         print(f"✅ Finding added: {title} (ID: {finding_id})")
@@ -74,7 +76,8 @@ class FindingsManager:
         return self.db.get_finding(finding_id)
     
     def get_all_findings(self, project_id: Optional[int] = None, status: Optional[str] = None,
-                        severity: Optional[str] = None) -> List[Dict[str, Any]]:
+                        severity: Optional[str] = None, experiment_id: Optional[int] = None,
+                        stage_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Retrieve findings, optionally filtered.
         
@@ -82,6 +85,8 @@ class FindingsManager:
             project_id: Filter by project ID
             status: Filter by status
             severity: Filter by severity
+            experiment_id: Filter by experiment ID
+            stage_id: Filter by stage ID
             
         Returns:
             List of findings
@@ -89,7 +94,9 @@ class FindingsManager:
         return self.db.get_all_findings(
             project_id=project_id,
             status=status,
-            severity=severity
+            severity=severity,
+            experiment_id=experiment_id,
+            stage_id=stage_id
         )
     
     def search_findings(self, query: str, project_id: Optional[int] = None) -> List[Dict[str, Any]]:

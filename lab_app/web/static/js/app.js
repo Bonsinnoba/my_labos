@@ -1,5 +1,5 @@
 // Centralized fetch wrapper with global error handling
-console.log('app.js loaded v18');
+console.log('app.js loaded v19');
 async function apiFetch(url, options = {}) {
     const skipAlert = options.skipErrorAlert || false;
     try {
@@ -43,8 +43,44 @@ function escapeHtml(str) {
         .replace(/'/g, '&#39;');
 }
 
+/**
+ * Renders LaTeX math equations inside a DOM element using KaTeX auto-render.
+ * Supports both inline ($...$) and display ($$...$$) delimiters.
+ * Safe to call even if KaTeX is not loaded.
+ */
+function renderMath(element) {
+    if (!element || typeof renderMathInElement === 'undefined') return;
+    try {
+        renderMathInElement(element, {
+            delimiters: [
+                { left: '$$',  right: '$$',  display: true  },
+                { left: '$',   right: '$',   display: false },
+                { left: '\\(', right: '\\)', display: false },
+                { left: '\\[', right: '\\]', display: true  }
+            ],
+            throwOnError: false,
+            errorColor: 'var(--accent-red)'
+        });
+    } catch(e) {
+        console.warn('KaTeX renderMath error:', e);
+    }
+}
 
-// Mobile Sidebar Toggle
+/**
+ * Parse markdown to HTML (using marked) then render math (using KaTeX).
+ * Returns the HTML string.
+ */
+function parseMarkdownAndMath(rawText) {
+    let html = rawText;
+    if (typeof marked !== 'undefined') {
+        html = marked.parse(rawText);
+    } else {
+        html = rawText.replace(/\n/g, '<br>');
+    }
+    return html;
+}
+
+
 function toggleMobileSidebar() {
     const sidebar = document.querySelector('.sidebar');
     const overlay = document.querySelector('.sidebar-overlay');
@@ -746,6 +782,13 @@ function closeProjectWorkspace() {
 async function openExperimentWorkspace(experimentId) {
     currentExperimentId = experimentId;
     
+    // Reset stage details view to list view by default
+    const stageDetailsView = document.getElementById('stage-details-view');
+    const stagesListView = document.getElementById('stages-list-view');
+    if (stageDetailsView) stageDetailsView.style.display = 'none';
+    if (stagesListView) stagesListView.style.display = 'block';
+    currentStageId = null;
+    
     try {
         const response = await apiFetch(`/api/logs/${experimentId}`);
         const data = await response.json();
@@ -797,130 +840,240 @@ async function runExperimentStageReview() {
     if (!currentExperimentId) return;
     
     const output = document.getElementById('experiment-lab-assistant-output');
-    output.innerHTML = '<div class="loading-spinner">Loading...</div>';
+    output.innerHTML = '<div class="ai-loading">Analyzing stage/experiment design...</div>';
     
     try {
-        const response = await apiFetch('/api/ai/stage-review', {
+        let stageContext = {};
+        if (currentStageId && window.currentExperimentStages) {
+            const stage = window.currentExperimentStages.find(s => s.id === currentStageId);
+            if (stage) {
+                const findingsList = Array.from(document.querySelectorAll('#stage-findings-list .content-item .title')).map(el => el.textContent.trim());
+                const documentsList = Array.from(document.querySelectorAll('#stage-documents-list .content-item .title')).map(el => el.textContent.trim());
+                
+                stageContext = {
+                    stage_name: stage.stage_name,
+                    status: stage.status || 'not_started',
+                    notes: stage.notes || '',
+                    start_time: stage.start_time || '',
+                    end_time: stage.end_time || '',
+                    experiment_title: document.getElementById('experiment-workspace-title').textContent,
+                    findings: findingsList.join(', '),
+                    documents: documentsList.join(', ')
+                };
+            }
+        } else if (window.currentExperimentStages && window.currentExperimentStages.length > 0) {
+            const stage = window.currentExperimentStages[0];
+            stageContext = {
+                stage_name: stage.stage_name,
+                status: stage.status || 'not_started',
+                notes: stage.notes || '',
+                start_time: stage.start_time || '',
+                end_time: stage.end_time || '',
+                experiment_title: document.getElementById('experiment-workspace-title').textContent
+            };
+        } else {
+            stageContext = {
+                stage_name: 'Initial Phase',
+                status: 'active',
+                notes: 'Experiment review initiated.',
+                experiment_title: document.getElementById('experiment-workspace-title').textContent
+            };
+        }
+        
+        const response = await fetch('/api/ai/stage-review', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                experiment_id: currentExperimentId
-            })
+            body: JSON.stringify({ stage_context: stageContext })
         });
         
-        if (response.ok) {
-            const data = await response.json();
-            output.innerHTML = `<div class="ai-response">${data.response || 'Stage review completed'}</div>`;
-        } else {
-            output.innerHTML = '<div class="error">Failed to run stage review</div>';
+        if (!response.ok) throw new Error('Failed to get AI response');
+        
+        output.innerHTML = '<div class="ai-response-text"></div>';
+        const responseText = output.querySelector('.ai-response-text');
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const chunk = decoder.decode(value);
+            responseText.textContent += chunk;
+            output.scrollTop = output.scrollHeight;
         }
     } catch (error) {
-        console.error('Error running stage review:', error);
-        output.innerHTML = '<div class="error">Error running stage review</div>';
+        output.innerHTML = `<div class="ai-response-text" style="color: var(--accent-red);">Error: ${error.message}</div>`;
+        showAlert('Failed to run stage review', 'Error');
     }
 }
 
 async function showExperimentAlternatesModal() {
     if (!currentExperimentId) return;
     
-    const result = await showMultiField([
-        { name: 'component', label: 'Component Name', type: 'text', placeholder: 'Enter component name...' }
-    ], 'Find Alternates', 'Find alternative components for this experiment');
-    
-    if (!result || !result.component) return;
-    
-    const output = document.getElementById('experiment-lab-assistant-output');
-    output.innerHTML = '<div class="loading-spinner">Loading...</div>';
-    
-    try {
-        const response = await apiFetch('/api/ai/alternates', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                experiment_id: currentExperimentId,
-                component: result.component
-            })
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            output.innerHTML = `<div class="ai-response">${data.response || 'Alternates found'}</div>`;
-        } else {
-            output.innerHTML = '<div class="error">Failed to find alternates</div>';
+    showModal({
+        type: 'prompt',
+        title: 'Find Component Alternates',
+        message: 'Enter component details (name, specifications, package type):',
+        callback: async (value) => {
+            if (!value) return;
+            
+            const output = document.getElementById('experiment-lab-assistant-output');
+            output.innerHTML = '<div class="ai-loading">Finding alternatives...</div>';
+            
+            try {
+                const response = await fetch('/api/ai/find-alternates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ component_details: value })
+                });
+                
+                if (!response.ok) throw new Error('Failed to get AI response');
+                
+                output.innerHTML = '<div class="ai-response-text"></div>';
+                const responseText = output.querySelector('.ai-response-text');
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    responseText.textContent += chunk;
+                    output.scrollTop = output.scrollHeight;
+                }
+            } catch (error) {
+                output.innerHTML = `<div class="ai-response-text" style="color: var(--accent-red);">Error: ${error.message}</div>`;
+                showAlert('Failed to find alternates', 'Error');
+            }
         }
-    } catch (error) {
-        console.error('Error finding alternates:', error);
-        output.innerHTML = '<div class="error">Error finding alternates</div>';
-    }
+    });
 }
 
 async function showExperimentFailureDiagnosisModal() {
     if (!currentExperimentId) return;
     
-    const result = await showMultiField([
-        { name: 'failure_description', label: 'Failure Description', type: 'textarea', rows: 4, placeholder: 'Describe the failure...' }
-    ], 'Diagnose Failure', 'Analyze the failure for this experiment');
-    
-    if (!result || !result.failure_description) return;
-    
-    const output = document.getElementById('experiment-lab-assistant-output');
-    output.innerHTML = '<div class="loading-spinner">Loading...</div>';
-    
-    try {
-        const response = await apiFetch('/api/ai/failure-diagnosis', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                experiment_id: currentExperimentId,
-                failure_description: result.failure_description
-            })
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            output.innerHTML = `<div class="ai-response">${data.response || 'Diagnosis completed'}</div>`;
-        } else {
-            output.innerHTML = '<div class="error">Failed to diagnose failure</div>';
+    showModal({
+        type: 'multi',
+        title: 'Diagnose Circuit Failure',
+        message: 'Enter failure observation:',
+        fields: [
+            { name: 'observation', label: 'Failure Observation', type: 'textarea', defaultValue: '', rows: 3 }
+        ],
+        callback: async (values) => {
+            if (!values || !values.observation) return;
+            
+            const output = document.getElementById('experiment-lab-assistant-output');
+            output.innerHTML = '<div class="ai-loading">Analyzing failure...</div>';
+            
+            try {
+                let experimentHistory = [];
+                try {
+                    const logsResponse = await apiFetch('/api/logs?limit=10&offset=0');
+                    if (logsResponse && logsResponse.data) {
+                        experimentHistory = logsResponse.data.map(log => ({
+                            experiment_title: log.title || log.log_title || '',
+                            experiment_outcome: log.outcome || '',
+                            experiment_details: log.details || log.description || '',
+                            stage_name: log.stage_name || '',
+                            stage_goals: log.stage_goals || '',
+                            status: log.status || ''
+                        }));
+                    }
+                } catch (e) {
+                    console.warn('Failed to fetch experiment history:', e);
+                }
+                
+                const response = await fetch('/api/ai/diagnose-failure', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        observation: values.observation,
+                        experiment_history: experimentHistory
+                    })
+                });
+                
+                if (!response.ok) throw new Error('Failed to get AI response');
+                
+                output.innerHTML = '<div class="ai-response-text"></div>';
+                const responseText = output.querySelector('.ai-response-text');
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    responseText.textContent += chunk;
+                    output.scrollTop = output.scrollHeight;
+                }
+            } catch (error) {
+                output.innerHTML = `<div class="ai-response-text" style="color: var(--accent-red);">Error: ${error.message}</div>`;
+                showAlert('Failed to diagnose failure', 'Error');
+            }
         }
-    } catch (error) {
-        console.error('Error diagnosing failure:', error);
-        output.innerHTML = '<div class="error">Error diagnosing failure</div>';
-    }
+    });
 }
 
 async function showExperimentScriptGenerationModal() {
     if (!currentExperimentId) return;
     
-    const result = await showMultiField([
-        { name: 'task', label: 'Task Description', type: 'textarea', rows: 4, placeholder: 'Describe the task for the script...' }
-    ], 'Generate Script', 'Generate a script for this experiment');
-    
-    if (!result || !result.task) return;
-    
-    const output = document.getElementById('experiment-lab-assistant-output');
-    output.innerHTML = '<div class="loading-spinner">Loading...</div>';
-    
-    try {
-        const response = await apiFetch('/api/ai/script-generation', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                experiment_id: currentExperimentId,
-                task: result.task
-            })
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            output.innerHTML = `<div class="ai-response">${data.response || 'Script generated'}</div>`;
-        } else {
-            output.innerHTML = '<div class="error">Failed to generate script</div>';
+    showModal({
+        type: 'multi',
+        title: 'Generate Test Script',
+        message: 'Enter test requirements:',
+        fields: [
+            { name: 'requirement', label: 'Test Requirement', type: 'textarea', defaultValue: '', rows: 3 },
+            { name: 'language', label: 'Language', type: 'select', options: [
+                { value: 'python', label: 'Python' },
+                { value: 'cpp', label: 'C++' },
+                { value: 'arduino', label: 'Arduino' }
+            ], defaultValue: 'python' }
+        ],
+        callback: async (values) => {
+            if (!values || !values.requirement) return;
+            
+            const output = document.getElementById('experiment-lab-assistant-output');
+            output.innerHTML = '<div class="ai-loading">Generating script...</div>';
+            
+            try {
+                const response = await fetch('/api/ai/generate-script', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        requirement: values.requirement,
+                        language: values.language
+                    })
+                });
+                
+                if (!response.ok) throw new Error('Failed to get AI response');
+                
+                output.innerHTML = '<div class="ai-response-text"></div>';
+                const responseText = output.querySelector('.ai-response-text');
+                
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    responseText.textContent += chunk;
+                    output.scrollTop = output.scrollHeight;
+                }
+            } catch (error) {
+                output.innerHTML = `<div class="ai-response-text" style="color: var(--accent-red);">Error: ${error.message}</div>`;
+                showAlert('Failed to generate script', 'Error');
+            }
         }
-    } catch (error) {
-        console.error('Error generating script:', error);
-        output.innerHTML = '<div class="error">Error generating script</div>';
-    }
+    });
 }
+
 
 async function loadExperimentData(experimentId) {
     // Load experiment-specific data for each tab
@@ -938,21 +1091,112 @@ async function loadExperimentOverview(experimentId) {
         const overview = document.getElementById('experiment-overview-content');
         if (experiment) {
             const overviewHtml = `
-                <p style="color: var(--text-secondary); margin-bottom: 12px;"><strong>Description:</strong> ${experiment.log_text || 'No description'}</p>
-                ${experiment.expected_outcome ? `<p style="color: var(--text-secondary); margin-bottom: 12px;"><strong>Expected Outcome:</strong> ${experiment.expected_outcome}</p>` : ''}
-                <p style="color: var(--text-secondary); margin-bottom: 12px;"><strong>Status:</strong> ${experiment.status || 'Active'}</p>
-                <p style="color: var(--text-secondary); margin-bottom: 12px;"><strong>Outcome:</strong> ${experiment.outcome || 'PENDING'}</p>
-                <p style="color: var(--text-secondary);"><strong>Created:</strong> ${experiment.timestamp || 'Unknown'}</p>
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <p style="color: var(--text-secondary); margin: 0;"><strong>Description:</strong> ${experiment.log_text || 'No description'}</p>
+                    ${experiment.expected_outcome ? `<p style="color: var(--text-secondary); margin: 0;"><strong>Expected Outcome:</strong> ${experiment.expected_outcome}</p>` : ''}
+                    <p style="color: var(--text-secondary); margin: 0;"><strong>Status:</strong> ${experiment.status || 'Active'}</p>
+                    
+                    <div style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap;">
+                        <span style="color: var(--text-secondary);"><strong>Outcome Status:</strong></span>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-sm ${experiment.outcome === 'PENDING' ? 'btn-primary' : 'btn-secondary'}" onclick="updateExperimentOutcome(${experiment.id}, 'PENDING', event)">Pending</button>
+                            <button class="btn btn-sm ${experiment.outcome === 'PASS' ? 'btn-success' : 'btn-secondary'}" onclick="updateExperimentOutcome(${experiment.id}, 'PASS', event)">Pass</button>
+                            <button class="btn btn-sm ${experiment.outcome === 'FAIL' ? 'btn-danger' : 'btn-secondary'}" onclick="updateExperimentOutcome(${experiment.id}, 'FAIL', event)">Fail</button>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px;">
+                        <label for="experiment-actual-outcome-input" style="font-weight: 600; color: var(--text-secondary);">Actual Outcome Details:</label>
+                        <textarea id="experiment-actual-outcome-input" class="search-input" style="width: 100%; height: 60px; resize: vertical; padding: 8px;" placeholder="Describe the actual outcome...">${experiment.actual_outcome || ''}</textarea>
+                    </div>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px;">
+                        <label for="experiment-conclusion-input" style="font-weight: 600; color: var(--text-secondary);">Conclusion / Narrative Synthesis:</label>
+                        <textarea id="experiment-conclusion-input" class="search-input" style="width: 100%; height: 80px; resize: vertical; padding: 8px;" placeholder="Add final experiment conclusion...">${experiment.conclusion || ''}</textarea>
+                    </div>
+                    
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
+                        <p style="color: var(--text-muted); font-size: 12px; margin: 0;"><strong>Created:</strong> ${experiment.timestamp || 'Unknown'}</p>
+                        <button class="btn btn-sm btn-primary" onclick="saveExperimentOutcomes(${experiment.id})">Save Outcomes & Conclusion</button>
+                    </div>
+                </div>
             `;
             overview.innerHTML = overviewHtml;
 
             // Load timeline into the experiment timeline area
             setTimeout(() => {
                 loadExperimentTimeline(experimentId, 'experiment-timeline-list');
+                loadExperimentUsageSummary(experimentId);
             }, 0);
         }
     } catch (error) {
         console.error('Error loading experiment overview:', error);
+    }
+}
+
+async function saveExperimentOutcomes(experimentId) {
+    const actualOutcome = document.getElementById('experiment-actual-outcome-input').value;
+    const conclusion = document.getElementById('experiment-conclusion-input').value;
+    
+    try {
+        const response = await apiFetch(`/api/logs/${experimentId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                actual_outcome: actualOutcome,
+                conclusion: conclusion
+            })
+        });
+        
+        if (response.ok) {
+            showAlert('Experiment outcomes and conclusion saved successfully', 'Success');
+            loadExperimentOverview(experimentId);
+        } else {
+            showAlert('Failed to save outcomes/conclusion', 'Error');
+        }
+    } catch (error) {
+        console.error('Error saving experiment outcomes:', error);
+    }
+}
+
+async function loadExperimentUsageSummary(experimentId) {
+    try {
+        const response = await apiFetch(`/api/experiments/${experimentId}/usage-summary`);
+        const data = await response.json();
+        const summary = data.data || [];
+        
+        const container = document.getElementById('experiment-usage-summary-content');
+        if (!container) return;
+        
+        if (summary.length === 0) {
+            container.innerHTML = '<div style="color:var(--text-muted); padding: 10px;">No resources used in this experiment yet</div>';
+            return;
+        }
+        
+        container.innerHTML = `
+            <table class="inventory-table" style="width:100%; margin-top: 8px; border-collapse: collapse;">
+                <thead>
+                    <tr style="border-bottom: 2px solid var(--border-color);">
+                        <th style="text-align: left; padding: 8px;">Resource</th>
+                        <th style="text-align: left; padding: 8px;">Type</th>
+                        <th style="text-align: left; padding: 8px;">Total Quantity Used</th>
+                        <th style="text-align: left; padding: 8px;">Last Used</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${summary.map(item => `
+                        <tr style="border-bottom: 1px solid var(--border-color);">
+                            <td style="padding: 8px;"><strong>${item.name}</strong>${item.details ? ` (${item.details})` : ''}</td>
+                            <td style="padding: 8px;"><span class="badge badge-info" style="font-size: 11px;">${item.entity_type.toUpperCase()}</span></td>
+                            <td style="padding: 8px;">${item.total_quantity} ${item.unit || ''}</td>
+                            <td style="padding: 8px;">${item.last_used || 'N/A'}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    } catch (error) {
+        console.error('Error loading experiment usage summary:', error);
     }
 }
 
@@ -1079,18 +1323,20 @@ async function loadExperimentStagesList(experimentId) {
         const response = await apiFetch(`/api/experiment_stages?experiment_id=${experimentId}&limit=200`);
         const data = await response.json();
         const stages = (data && data.data) ? data.data : [];
+        window.currentExperimentStages = stages;
         
         const list = document.getElementById('experiment-stages-list');
         if (!stages || stages.length === 0) {
             list.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-muted);">No stages yet</div>';
         } else {
             list.innerHTML = stages.map(stage => `
-                <div class="content-item">
+                <div class="content-item stage-card" onclick="enterStageWorkspace(${stage.id})" style="cursor: pointer; display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--border-color); border-radius: 8px; padding: 12px; margin-bottom: 8px; background: var(--bg-primary); transition: all 0.2s;">
                     <div>
-                        <div class="title">${stage.stage_name || 'Stage'}</div>
-                        <div class="description">${stage.status || 'not_started'}</div>
+                        <div class="title" style="font-weight: 600; font-size: 15px; color: var(--text-primary);">${stage.stage_name || 'Stage'}</div>
+                        <div class="description" style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">Status: <span class="badge ${stage.status === 'completed' ? 'badge-success' : stage.status === 'failed' ? 'badge-danger' : stage.status === 'in_progress' ? 'badge-warning' : 'badge-secondary'}">${stage.status || 'not_started'}</span></div>
+                        ${stage.owner ? `<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">Owner: ${stage.owner}</div>` : ''}
                     </div>
-                    <div style="display:flex; gap:8px;">
+                    <div style="display:flex; gap:8px;" onclick="event.stopPropagation();">
                         <button class="btn btn-sm btn-secondary" onclick="deleteExperimentStage(${stage.id}, ${experimentId})">🗑️</button>
                     </div>
                 </div>
@@ -1143,6 +1389,304 @@ async function deleteExperimentStage(stageId, experimentId) {
     } catch (error) {
         console.error('Error deleting stage:', error);
         showAlert('Error deleting stage', 'Error');
+    }
+}
+
+let currentStageId = null;
+
+async function enterStageWorkspace(stageId) {
+    currentStageId = stageId;
+    const stage = window.currentExperimentStages.find(s => s.id === stageId);
+    if (!stage) return;
+    
+    // Set UI details
+    document.getElementById('stage-workspace-title').textContent = stage.stage_name || 'Stage';
+    
+    const statusBadge = document.getElementById('stage-workspace-status');
+    statusBadge.textContent = stage.status || 'not_started';
+    statusBadge.className = `project-status-badge ${stage.status || 'not_started'}`;
+    
+    document.getElementById('stage-status-select').value = stage.status || 'not_started';
+    document.getElementById('stage-workspace-owner').textContent = stage.owner || 'None';
+    document.getElementById('stage-workspace-notes').value = stage.notes || '';
+    
+    const startDate = stage.start_time ? new Date(stage.start_time).toLocaleDateString() : '';
+    const endDate = stage.end_time ? new Date(stage.end_time).toLocaleDateString() : '';
+    document.getElementById('stage-workspace-timeline-dates').textContent = 
+        startDate || endDate ? `${startDate} ${endDate ? 'to ' + endDate : ''}` : 'Not set';
+    
+    // Update lab assistant context
+    const contextValue = document.getElementById('experiment-lab-assistant-context-value');
+    if (contextValue) {
+        contextValue.textContent = `Stage: ${stage.stage_name || 'Stage'}`;
+    }
+    
+    // Switch views
+    document.getElementById('stages-list-view').style.display = 'none';
+    document.getElementById('stage-details-view').style.display = 'block';
+    
+    // Load findings and documents scoped to this stage
+    loadStageFindings(stageId);
+    loadStageDocuments(stageId);
+}
+
+function exitStageWorkspace() {
+    currentStageId = null;
+    document.getElementById('stage-details-view').style.display = 'none';
+    document.getElementById('stages-list-view').style.display = 'block';
+    
+    // Revert lab assistant context to experiment
+    if (currentExperimentId) {
+        const titleEl = document.getElementById('experiment-workspace-title');
+        const contextValue = document.getElementById('experiment-lab-assistant-context-value');
+        if (contextValue && titleEl) {
+            contextValue.textContent = `Experiment: ${titleEl.textContent}`;
+        }
+        loadExperimentStagesList(currentExperimentId);
+    }
+}
+
+async function updateStageStatus() {
+    if (!currentStageId) return;
+    const status = document.getElementById('stage-status-select').value;
+    try {
+        const response = await apiFetch(`/api/experiment_stages/${currentStageId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status })
+        });
+        if (response.ok) {
+            const statusBadge = document.getElementById('stage-workspace-status');
+            statusBadge.textContent = status;
+            statusBadge.className = `project-status-badge ${status}`;
+            showAlert('Stage status updated successfully', 'Success');
+            // Refresh stage record in current stages list
+            if (window.currentExperimentStages) {
+                const stage = window.currentExperimentStages.find(s => s.id === currentStageId);
+                if (stage) stage.status = status;
+            }
+        } else {
+            showAlert('Failed to update stage status', 'Error');
+        }
+    } catch (error) {
+        console.error('Error updating stage status:', error);
+    }
+}
+
+async function updateStageNotes() {
+    if (!currentStageId) return;
+    const notes = document.getElementById('stage-workspace-notes').value;
+    try {
+        const response = await apiFetch(`/api/experiment_stages/${currentStageId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ notes })
+        });
+        if (response.ok) {
+            showAlert('Stage notes updated successfully', 'Success');
+            if (window.currentExperimentStages) {
+                const stage = window.currentExperimentStages.find(s => s.id === currentStageId);
+                if (stage) stage.notes = notes;
+            }
+        } else {
+            showAlert('Failed to update stage notes', 'Error');
+        }
+    } catch (error) {
+        console.error('Error updating stage notes:', error);
+    }
+}
+
+async function loadStageFindings(stageId) {
+    try {
+        const response = await apiFetch(`/api/findings?stage_id=${stageId}`);
+        const data = await response.json();
+        const findings = data.findings || [];
+        
+        const list = document.getElementById('stage-findings-list');
+        if (findings.length === 0) {
+            list.innerHTML = '<div style="color:var(--text-muted); padding:10px;">No findings recorded for this stage yet</div>';
+            return;
+        }
+        
+        list.innerHTML = findings.map(f => `
+            <div class="content-item" style="display:flex; justify-content:space-between; align-items:center; border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; margin-bottom: 8px; background: var(--bg-secondary);">
+                <div style="flex: 1; min-width: 0; text-align: left;">
+                    <div style="font-weight:600; color:var(--text-primary);">${f.title}</div>
+                    <div style="font-size:13px; color:var(--text-secondary); margin-top:4px;">${f.description || ''}</div>
+                </div>
+                <button class="btn btn-sm btn-secondary" onclick="deleteStageFinding(${f.id})">🗑️</button>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('Error loading stage findings:', error);
+    }
+}
+
+async function addStageFinding() {
+    if (!currentStageId) return;
+    const result = await showMultiField([
+        { name: 'title', label: 'Finding Title', type: 'text', placeholder: 'Enter finding title...' },
+        { name: 'description', label: 'Description', type: 'textarea', rows: 4, placeholder: 'Enter details of the finding...' }
+    ], 'Add Stage Finding', 'Enter finding details:');
+    
+    if (!result || !result.title) return;
+    
+    try {
+        const response = await apiFetch('/api/findings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title: result.title,
+                description: result.description || '',
+                project_id: currentProjectId,
+                experiment_id: currentExperimentId,
+                stage_id: currentStageId,
+                finding_type: 'observation',
+                severity: 'info'
+            })
+        });
+        
+        if (response.ok) {
+            showAlert('Stage finding added successfully', 'Success');
+            loadStageFindings(currentStageId);
+        } else {
+            showAlert('Failed to add stage finding', 'Error');
+        }
+    } catch (error) {
+        console.error('Error adding stage finding:', error);
+    }
+}
+
+async function deleteStageFinding(findingId) {
+    if (!(await showConfirm('Delete this finding?'))) return;
+    try {
+        const response = await apiFetch(`/api/findings/${findingId}`, { method: 'DELETE' });
+        if (response.ok) {
+            showAlert('Finding deleted successfully', 'Success');
+            loadStageFindings(currentStageId);
+        } else {
+            showAlert('Failed to delete finding', 'Error');
+        }
+    } catch (error) {
+        console.error('Error deleting stage finding:', error);
+    }
+}
+
+async function loadStageDocuments(stageId) {
+    try {
+        const response = await apiFetch(`/api/documents?stage_id=${stageId}`);
+        const data = await response.json();
+        const documents = data.documents || [];
+        
+        const list = document.getElementById('stage-documents-list');
+        if (documents.length === 0) {
+            list.innerHTML = '<div style="color:var(--text-muted); padding:10px;">No documents uploaded for this stage yet</div>';
+            return;
+        }
+        
+        list.innerHTML = documents.map(d => `
+            <div class="content-item" style="display:flex; justify-content:space-between; align-items:center; border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; margin-bottom: 8px; background: var(--bg-secondary);">
+                <div style="flex: 1; min-width: 0; margin-right: 12px; text-align: left;">
+                    <a href="/api/documents/${d.id}/view" target="_blank" style="font-weight:600; color:var(--text-primary); text-decoration:none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">📄 ${d.title}</a>
+                    <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Type: ${d.file_type || 'Unknown'} | Size: ${d.file_size ? (d.file_size / 1024).toFixed(1) + ' KB' : 'Unknown'}</div>
+                </div>
+                <button class="btn btn-sm btn-secondary" onclick="deleteStageDocument(${d.id})">🗑️</button>
+            </div>
+        `).join('');
+    } catch (error) {
+        console.error('Error loading stage documents:', error);
+    }
+}
+
+function triggerStageFileUpload() {
+    document.getElementById('stage-document-file-input').click();
+}
+
+async function handleStageFileUpload(event) {
+    const file = event.target.files[0];
+    if (!file || !currentStageId) return;
+    
+    // Detect file type
+    const title = file.name.replace(/\.[^/.]+$/, "");
+    let file_type = 'document';
+    const mimeType = file.type;
+    const extension = file.name.split('.').pop().toLowerCase();
+    
+    if (mimeType.startsWith('image/')) {
+        file_type = 'image';
+    } else if (mimeType === 'application/pdf') {
+        file_type = 'pdf';
+    } else if (mimeType.startsWith('video/')) {
+        file_type = 'video';
+    } else if (extension === 'pdf') {
+        file_type = 'pdf';
+    } else if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'svg'].includes(extension)) {
+        file_type = 'image';
+    } else if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(extension)) {
+        file_type = 'video';
+    } else if (['doc', 'docx'].includes(extension)) {
+        file_type = 'document';
+    } else if (['txt', 'md'].includes(extension)) {
+        file_type = 'text';
+    }
+    
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('title', title);
+        formData.append('file_type', file_type);
+        if (currentProjectId) formData.append('project_id', currentProjectId);
+        if (currentExperimentId) formData.append('experiment_id', currentExperimentId);
+        formData.append('stage_id', currentStageId);
+        
+        showAlert('Uploading stage document...', 'Info');
+        
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/documents', true);
+        
+        xhr.upload.onprogress = function(e) {
+            if (e.lengthComputable) {
+                const percent = (e.loaded / e.total) * 100;
+                showAlert(`Uploading: ${Math.round(percent)}%`, 'Info');
+            }
+        };
+        
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                showAlert('Stage document uploaded successfully', 'Success');
+                loadStageDocuments(currentStageId);
+                refreshDashboardInBackground();
+            } else {
+                showAlert('Failed to upload stage document', 'Error');
+            }
+        };
+        
+        xhr.onerror = function() {
+            showAlert('Error uploading document', 'Error');
+        };
+        
+        xhr.send(formData);
+    } catch (error) {
+        console.error('Error uploading stage document:', error);
+        showAlert('Error uploading document', 'Error');
+    }
+    
+    event.target.value = '';
+}
+
+async function deleteStageDocument(docId) {
+    if (!(await showConfirm('Delete this document?'))) return;
+    try {
+        const response = await apiFetch(`/api/documents/${docId}`, { method: 'DELETE' });
+        if (response.ok) {
+            showAlert('Document deleted successfully', 'Success');
+            loadStageDocuments(currentStageId);
+            refreshDashboardInBackground();
+        } else {
+            showAlert('Failed to delete document', 'Error');
+        }
+    } catch (error) {
+        console.error('Error deleting stage document:', error);
     }
 }
 
@@ -1206,20 +1750,94 @@ async function loadProjectOverview(projectId) {
             }
 
             const overviewHtml = `
-                <p style="color: var(--text-secondary); margin-bottom: 12px;"><strong>Description:</strong> ${project.description || 'No description'}</p>
-                <p style="color: var(--text-secondary); margin-bottom: 12px;"><strong>Status:</strong> ${project.status || 'Active'}</p>
-                <p style="color: var(--text-secondary); margin-bottom: 12px;"><strong>Start Date:</strong> ${project.start_date || 'Not set'}</p>
-                <p style="color: var(--text-secondary);"><strong>Summary Findings:</strong> ${summary}</p>
+                <div style="display: flex; flex-direction: column; gap: 12px;">
+                    <p style="color: var(--text-secondary); margin: 0;"><strong>Description:</strong> ${project.description || 'No description'}</p>
+                    <p style="color: var(--text-secondary); margin: 0;"><strong>Status:</strong> ${project.status || 'Active'}</p>
+                    <p style="color: var(--text-secondary); margin: 0;"><strong>Start Date:</strong> ${project.start_date || 'Not set'}</p>
+                    <p style="color: var(--text-secondary); margin: 0;"><strong>Summary Findings:</strong> ${summary}</p>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px;">
+                        <label for="project-outcome-input" style="font-weight: 600; color: var(--text-secondary);">Project Outcome / Conclusion:</label>
+                        <textarea id="project-outcome-input" class="search-input" style="width: 100%; height: 80px; resize: vertical; padding: 8px;" placeholder="Add final outcome details for the project...">${project.project_outcome || project.summary_findings || ''}</textarea>
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; margin-top: 4px;">
+                        <button class="btn btn-sm btn-primary" onclick="saveProjectOutcome(${project.id})">Save Project Outcome</button>
+                    </div>
+                </div>
             `;
             overview.innerHTML = overviewHtml;
 
             // Load timeline into the overview timeline area
             setTimeout(() => {
                 loadProjectTimeline(projectId, 'project-overview-timeline-list');
+                loadProjectUsageSummary(projectId);
             }, 0);
         }
     } catch (error) {
         console.error('Error loading project overview:', error);
+    }
+}
+
+async function saveProjectOutcome(projectId) {
+    const outcomeVal = document.getElementById('project-outcome-input').value;
+    try {
+        const response = await apiFetch(`/api/projects/${projectId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                project_outcome: outcomeVal
+            })
+        });
+        
+        if (response.ok) {
+            showAlert('Project outcome saved successfully', 'Success');
+            loadProjectOverview(projectId);
+        } else {
+            showAlert('Failed to save project outcome', 'Error');
+        }
+    } catch (error) {
+        console.error('Error saving project outcome:', error);
+    }
+}
+
+async function loadProjectUsageSummary(projectId) {
+    try {
+        const response = await apiFetch(`/api/projects/${projectId}/usage-summary`);
+        const data = await response.json();
+        const summary = data.data || [];
+        
+        const container = document.getElementById('project-usage-summary-content');
+        if (!container) return;
+        
+        if (summary.length === 0) {
+            container.innerHTML = '<div style="color:var(--text-muted); padding: 10px;">No resources used in this project yet</div>';
+            return;
+        }
+        
+        container.innerHTML = `
+            <table class="inventory-table" style="width:100%; margin-top: 8px; border-collapse: collapse;">
+                <thead>
+                    <tr style="border-bottom: 2px solid var(--border-color);">
+                        <th style="text-align: left; padding: 8px;">Resource</th>
+                        <th style="text-align: left; padding: 8px;">Type</th>
+                        <th style="text-align: left; padding: 8px;">Total Quantity Used</th>
+                        <th style="text-align: left; padding: 8px;">Last Used</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${summary.map(item => `
+                        <tr style="border-bottom: 1px solid var(--border-color);">
+                            <td style="padding: 8px;"><strong>${item.name}</strong>${item.details ? ` (${item.details})` : ''}</td>
+                            <td style="padding: 8px;"><span class="badge badge-info" style="font-size: 11px;">${item.entity_type.toUpperCase()}</span></td>
+                            <td style="padding: 8px;">${item.total_quantity} ${item.unit || ''}</td>
+                            <td style="padding: 8px;">${item.last_used || 'N/A'}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    } catch (error) {
+        console.error('Error loading project usage summary:', error);
     }
 }
 
@@ -1814,140 +2432,204 @@ async function loadProjectUsage(projectId) {
     }
 }
 
-function openLogUsageForProject() {
-    // Minimal form: entity_type, entity_id, quantity, unit, stage, notes
-    (async () => {
-        let stageOptions = [];
-        try {
-            const stResp = await apiFetch(`/api/project_stages?project_id=${currentProjectId}&limit=200`);
-            const stData = await stResp.json();
-            const stList = (stData && stData.data) ? stData.data : [];
-            stageOptions = stList.map(s => ({ value: s.id, label: s.stage_name || s.name }));
-        } catch (e) { stageOptions = []; }
+// ── Log Usage Modal ──────────────────────────────────────────────────────────
+let _luContext = {}; // { project_id, experiment_id, stage_id }
 
-        return showMultiField([
-        { name: 'entity_type', label: 'Type', type: 'select', options: [
-            { value: 'component', label: 'Component' },
-            { value: 'tool', label: 'Tool' },
-            { value: 'material', label: 'Material' },
-            { value: 'equipment', label: 'Equipment' }
-        ]},
-        { name: 'entity_id', label: 'Item ID', type: 'text', placeholder: 'Enter item ID (numeric)' },
-        { name: 'quantity_used', label: 'Quantity Used', type: 'text', placeholder: 'e.g., 1 or 0.5' },
-        { name: 'unit', label: 'Unit', type: 'text', placeholder: 'e.g., pcs, g, ml' },
-        { name: 'stage_id', label: 'Stage', type: 'select', options: stageOptions },
-        { name: 'post_use_status', label: 'Post-use status', type: 'text', placeholder: 'e.g., usable, needs_maintenance' },
-        { name: 'notes', label: 'Notes', type: 'textarea', rows: 2 }
-    ], 'Log Usage', 'Record usage for this project').then(async (res) => {
-        if (!res) return;
-        const payload = {
-            project_id: currentProjectId,
-            entity_type: res.entity_type,
-            entity_id: Number(res.entity_id) || null,
-            quantity_used: Number(res.quantity_used) || 0,
-            unit: res.unit,
-            stage_id: res.stage_id ? Number(res.stage_id) : null,
-            post_use_status: res.post_use_status,
-            notes: res.notes,
-            auto_update_inventory: true
-        };
-        await submitUsage(payload);
-    }).catch(() => {});
-    })();
+function openLogUsageForProject() {
+    openLogUsageModal({ project_id: currentProjectId });
 }
 
 function openLogUsageForExperiment(experimentId) {
-    (async () => {
-        let stageOptions = [];
-        try {
-            const stResp = await apiFetch(`/api/experiment_stages?experiment_id=${experimentId}&limit=200`);
-            const stData = await stResp.json();
-            const stList = (stData && stData.data) ? stData.data : [];
-            stageOptions = stList.map(s => ({ value: s.id, label: s.stage_name || s.name }));
-        } catch (e) { stageOptions = []; }
-
-        return showMultiField([
-        { name: 'entity_type', label: 'Type', type: 'select', options: [
-            { value: 'component', label: 'Component' },
-            { value: 'tool', label: 'Tool' },
-            { value: 'material', label: 'Material' },
-            { value: 'equipment', label: 'Equipment' }
-        ]},
-        { name: 'entity_id', label: 'Item ID', type: 'text', placeholder: 'Enter item ID (numeric)' },
-        { name: 'quantity_used', label: 'Quantity Used', type: 'text', placeholder: 'e.g., 1 or 0.5' },
-        { name: 'unit', label: 'Unit', type: 'text', placeholder: 'e.g., pcs, g, ml' },
-        { name: 'stage_id', label: 'Stage', type: 'select', options: stageOptions },
-        { name: 'post_use_status', label: 'Post-use status', type: 'text', placeholder: 'e.g., usable, needs_maintenance' },
-        { name: 'notes', label: 'Notes', type: 'textarea', rows: 2 }
-    ], 'Log Usage', 'Record usage for this experiment').then(async (res) => {
-        if (!res) return;
-        const payload = {
-            project_id: currentProjectId,
-            experiment_id: experimentId,
-            entity_type: res.entity_type,
-            entity_id: Number(res.entity_id) || null,
-            quantity_used: Number(res.quantity_used) || 0,
-            unit: res.unit,
-            stage_id: res.stage_id ? Number(res.stage_id) : null,
-            post_use_status: res.post_use_status,
-            notes: res.notes,
-            auto_update_inventory: true
-        };
-        await submitUsage(payload);
-    }).catch(() => {});
-    })();
+    openLogUsageModal({ project_id: currentProjectId, experiment_id: experimentId });
 }
 
 async function openLogUsageForStage(stageId, experimentId = null, projectId = null) {
-    // Pre-select stage when logging usage
-    try {
-        let stageOptions = [];
-        if (experimentId) {
-            const stResp = await apiFetch(`/api/experiment_stages?experiment_id=${experimentId}&limit=200`);
-            const stData = await stResp.json();
-            const stList = (stData && stData.data) ? stData.data : [];
-            stageOptions = stList.map(s => ({ value: s.id, label: s.stage_name || s.name }));
-        } else if (projectId) {
-            const stResp = await apiFetch(`/api/project_stages?project_id=${projectId}&limit=200`);
-            const stData = await stResp.json();
-            const stList = (stData && stData.data) ? stData.data : [];
-            stageOptions = stList.map(s => ({ value: s.id, label: s.stage_name || s.name }));
+    openLogUsageModal({
+        project_id: projectId || currentProjectId,
+        experiment_id: experimentId || currentExperimentId,
+        stage_id: stageId
+    });
+}
+
+async function openLogUsageModal(context = {}) {
+    _luContext = context;
+
+    // subtitle
+    const subtitle = document.getElementById('log-usage-modal-subtitle');
+    if (subtitle) {
+        const parts = [];
+        if (context.experiment_id) parts.push('Experiment #' + context.experiment_id);
+        else if (context.project_id) parts.push('Project #' + context.project_id);
+        if (context.stage_id) parts.push('Stage #' + context.stage_id);
+        subtitle.textContent = parts.length ? 'Logging for: ' + parts.join(' › ') : 'Select resources used and fill in usage details';
+    }
+
+    // reset tabs
+    switchLogUsageTab('components');
+
+    // show modal
+    const modal = document.getElementById('log-usage-modal');
+    modal.style.display = 'flex';
+
+    // fetch all resources in parallel
+    const [compData, matData, toolData, eqData] = await Promise.allSettled([
+        apiFetch('/api/components').then(r => r.json()),
+        apiFetch('/api/materials').then(r => r.json()),
+        apiFetch('/api/tools').then(r => r.json()),
+        apiFetch('/api/equipment').then(r => r.json())
+    ]);
+
+    const components = compData.status === 'fulfilled' ? (compData.value.data || []) : [];
+    const materials  = matData.status  === 'fulfilled' ? (matData.value.data  || []) : [];
+    const tools      = toolData.status === 'fulfilled' ? (toolData.value.data || []) : [];
+    const equipment  = eqData.status   === 'fulfilled' ? (eqData.value.data   || []) : [];
+
+    renderLuSection('components', components, item => ({
+        id: item.id, name: item.name,
+        meta: [item.part_number, item.quantity != null ? `Qty: ${item.quantity}` : ''].filter(Boolean).join(' · '),
+        badge: item.status || ''
+    }));
+    renderLuSection('materials', materials, item => ({
+        id: item.id, name: item.name,
+        meta: [item.material_type, item.quantity != null ? `Stock: ${item.quantity} ${item.unit || ''}` : ''].filter(Boolean).join(' · '),
+        badge: item.status || ''
+    }));
+    renderLuSection('tools', tools, item => ({
+        id: item.id, name: item.name,
+        meta: [item.tool_type, item.storage_location].filter(Boolean).join(' · '),
+        badge: item.status || ''
+    }));
+    renderLuSection('equipment', equipment, item => ({
+        id: item.id, name: item.name,
+        meta: [item.model, item.location].filter(Boolean).join(' · '),
+        badge: item.status || ''
+    }));
+
+    updateLuSelectedCount();
+}
+
+function renderLuSection(type, items, mapper) {
+    const container = document.getElementById(`lu-section-${type}`);
+    if (!container) return;
+    if (!items.length) {
+        container.innerHTML = `<div class="lu-empty">No ${type} in inventory yet</div>`;
+        return;
+    }
+    container.innerHTML = items.map(item => {
+        const { id, name, meta, badge } = mapper(item);
+        return `
+        <div class="lu-item" id="lu-item-${type}-${id}" data-type="${type}" data-id="${id}">
+            <div class="lu-item-header" onclick="toggleLuItem('${type}', ${id})">
+                <input type="checkbox" class="lu-item-checkbox" id="lu-chk-${type}-${id}"
+                    onclick="event.stopPropagation(); toggleLuItem('${type}', ${id})" />
+                <span class="lu-item-name">${name}</span>
+                ${meta ? `<span class="lu-item-meta">${meta}</span>` : ''}
+                ${badge ? `<span class="lu-item-badge">${badge}</span>` : ''}
+            </div>
+            <div class="lu-detail-container" style="display:none; padding:0 16px 14px;"></div>
+        </div>`;
+    }).join('');
+}
+
+function toggleLuItem(type, id) {
+    const item = document.getElementById(`lu-item-${type}-${id}`);
+    const chk  = document.getElementById(`lu-chk-${type}-${id}`);
+    const detail = item.querySelector('.lu-detail-container');
+
+    chk.checked = !chk.checked;
+    item.classList.toggle('checked', chk.checked);
+
+    if (chk.checked) {
+        if (!detail.hasChildNodes()) {
+            const tpl = document.getElementById('lu-detail-tpl');
+            const clone = tpl.content.cloneNode(true);
+            detail.appendChild(clone);
         }
+        detail.style.display = 'block';
+    } else {
+        detail.style.display = 'none';
+    }
+    updateLuSelectedCount();
+}
 
-        const fields = [
-            { name: 'entity_type', label: 'Type', type: 'select', options: [
-                { value: 'component', label: 'Component' },
-                { value: 'tool', label: 'Tool' },
-                { value: 'material', label: 'Material' },
-                { value: 'equipment', label: 'Equipment' }
-            ]},
-            { name: 'entity_id', label: 'Item ID', type: 'text', placeholder: 'Enter item ID (numeric)' },
-            { name: 'quantity_used', label: 'Quantity Used', type: 'text', placeholder: 'e.g., 1 or 0.5' },
-            { name: 'unit', label: 'Unit', type: 'text', placeholder: 'e.g., pcs, g, ml' },
-            { name: 'stage_id', label: 'Stage', type: 'select', options: stageOptions, defaultValue: stageId },
-            { name: 'post_use_status', label: 'Post-use status', type: 'text', placeholder: 'e.g., usable, needs_maintenance' },
-            { name: 'notes', label: 'Notes', type: 'textarea', rows: 2 }
-        ];
+function updateLuSelectedCount() {
+    const total = document.querySelectorAll('#log-usage-modal .lu-item-checkbox:checked').length;
+    const el = document.getElementById('lu-selected-count');
+    if (el) el.textContent = total === 0 ? '0 items selected' : `${total} item${total > 1 ? 's' : ''} selected`;
+}
 
-        const res = await showMultiField(fields, 'Log Usage', 'Record usage tied to this stage');
-        if (!res) return;
+function switchLogUsageTab(section) {
+    document.querySelectorAll('.lu-tab').forEach(t => t.classList.toggle('active', t.dataset.section === section));
+    document.querySelectorAll('.lu-section').forEach(s => s.style.display = 'none');
+    const active = document.getElementById(`lu-section-${section}`);
+    if (active) active.style.display = 'block';
+}
+
+function closeLogUsageModal() {
+    const modal = document.getElementById('log-usage-modal');
+    if (modal) modal.style.display = 'none';
+    _luContext = {};
+}
+
+async function submitLogUsageModal() {
+    const checkedItems = document.querySelectorAll('#log-usage-modal .lu-item-checkbox:checked');
+    if (!checkedItems.length) {
+        showAlert('Please select at least one resource', 'Warning');
+        return;
+    }
+
+    const entries = [];
+    checkedItems.forEach(chk => {
+        const itemEl = chk.closest('.lu-item');
+        const type = itemEl.dataset.type;
+        const id   = Number(itemEl.dataset.id);
+        const detail = itemEl.querySelector('.lu-detail-container');
+
+        entries.push({
+            entity_type:        type === 'components' ? 'component' : type.replace(/s$/, ''),
+            entity_id:          id,
+            quantity_used:      parseFloat(detail.querySelector('.lu-qty')?.value) || 0,
+            unit:               detail.querySelector('.lu-unit')?.value?.trim() || '',
+            post_use_status:    detail.querySelector('.lu-status')?.value || 'good',
+            needs_repair:       detail.querySelector('.lu-needs-repair')?.checked || false,
+            needs_replacement:  detail.querySelector('.lu-needs-replacement')?.checked || false,
+            notes:              detail.querySelector('.lu-notes')?.value?.trim() || '',
+        });
+    });
+
+    let successCount = 0, failCount = 0;
+    for (const entry of entries) {
         const payload = {
-            project_id: projectId || currentProjectId,
-            experiment_id: experimentId || null,
-            entity_type: res.entity_type,
-            entity_id: Number(res.entity_id) || null,
-            quantity_used: Number(res.quantity_used) || 0,
-            unit: res.unit,
-            stage_id: res.stage_id ? Number(res.stage_id) : (stageId ? Number(stageId) : null),
-            post_use_status: res.post_use_status,
-            notes: res.notes,
+            ...entry,
+            ...(_luContext.project_id    ? { project_id:    _luContext.project_id }    : {}),
+            ...(_luContext.experiment_id ? { experiment_id: _luContext.experiment_id } : {}),
+            ...(_luContext.stage_id      ? { stage_id:      _luContext.stage_id }      : {}),
             auto_update_inventory: true
         };
-        await submitUsage(payload);
-    } catch (err) {
-        console.error('Error opening Log Usage for stage:', err);
+        try {
+            const resp = await submitUsage(payload, true);
+            if (resp) successCount++; else failCount++;
+        } catch { failCount++; }
+    }
+
+    closeLogUsageModal();
+
+    if (successCount > 0) {
+        showAlert(`✓ Logged usage for ${successCount} resource${successCount > 1 ? 's' : ''}${failCount > 0 ? ` (${failCount} failed)` : ''}`, 'Success');
+        if (_luContext.project_id) {
+            loadProjectUsage(_luContext.project_id);
+            loadProjectOverview(_luContext.project_id);
+        }
+        if (_luContext.experiment_id) {
+            loadExperimentOverview(_luContext.experiment_id);
+        }
+        refreshDashboardInBackground();
+    } else {
+        showAlert('Failed to log usage. Please try again.', 'Error');
     }
 }
+
+
 
 function applyProjectTimelineFilters() {
     const type = document.getElementById('timeline-filter-type')?.value || '';
@@ -1972,7 +2654,7 @@ function applyProjectTimelineFilters() {
     });
 }
 
-async function submitUsage(payload) {
+async function submitUsage(payload, silent = false) {
     try {
         const resp = await apiFetch('/api/usage', {
             method: 'POST',
@@ -1980,17 +2662,22 @@ async function submitUsage(payload) {
             body: JSON.stringify(payload)
         });
         if (resp.ok) {
-            showAlert('Usage logged', 'Success');
-            if (currentProjectId) loadProjectUsage(currentProjectId);
-            // refresh inventory lists if present
-            if (document.getElementById('project-components-list')) loadProjectComponents(currentProjectId);
-            if (document.getElementById('project-documents-list')) loadProjectDocuments(currentProjectId);
+            if (!silent) {
+                showAlert('Usage logged', 'Success');
+                if (currentProjectId) loadProjectUsage(currentProjectId);
+                if (document.getElementById('project-components-list')) loadProjectComponents(currentProjectId);
+                if (document.getElementById('project-documents-list')) loadProjectDocuments(currentProjectId);
+            }
+            return true;
         }
+        return false;
     } catch (err) {
         console.error('Error submitting usage:', err);
-        showAlert('Error logging usage', 'Error');
+        if (!silent) showAlert('Error logging usage', 'Error');
+        return false;
     }
 }
+
 
 // Experiment stages management (simple create + list refresh)
 async function loadExperimentStages(projectId = null, experimentId = null) {
@@ -2045,32 +2732,36 @@ async function deleteStage(stageId, projectId = null) {
 }
 
 function openManageExperimentStages(projectId = null, experimentId = null) {
-    // Open a small multi-field modal to create a new stage for project or experiment
+    // Resolve experimentId from global context if not passed directly
+    const resolvedExpId = experimentId || currentExperimentId || null;
+    const resolvedProjId = projectId || null;
+
     showMultiField([
-        { name: 'name', label: 'Stage name', type: 'text', placeholder: 'e.g., Hypothesis' },
-        { name: 'owner', label: 'Owner', type: 'text', placeholder: 'Owner username' },
-        { name: 'start_date', label: 'Start date', type: 'text', placeholder: 'YYYY-MM-DD' },
-        { name: 'end_date', label: 'End date', type: 'text', placeholder: 'YYYY-MM-DD' },
-        { name: 'notes', label: 'Notes', type: 'textarea', rows: 3 }
-    ], projectId ? 'Create Project Stage' : 'Create Experiment Stage', 'Create a new stage').then(async (res) => {
+        { name: 'name', label: 'Stage Name', type: 'text', placeholder: 'e.g. Sample Preparation, Baseline Test…' },
+        { name: 'owner', label: 'Owner (optional)', type: 'text', placeholder: 'Who runs this stage?' },
+        { name: 'start_date', label: 'Start Date (optional)', type: 'text', placeholder: 'YYYY-MM-DD' },
+        { name: 'end_date', label: 'End Date (optional)', type: 'text', placeholder: 'YYYY-MM-DD' },
+        { name: 'notes', label: 'Notes (optional)', type: 'textarea', rows: 3 }
+    ], resolvedProjId ? 'New Project Stage' : 'New Experiment Stage', 'Type a name for this stage:').then(async (res) => {
         if (!res || !res.name) return;
         const payload = {
-            stage_name: res.name,
+            stage_name: res.name.trim(),
             owner: res.owner || null,
             start_time: res.start_date || null,
             end_time: res.end_date || null,
             notes: res.notes || ''
         };
-        // Use appropriate endpoint based on whether it's a project or experiment stage
-        const endpoint = projectId ? '/api/project_stages' : '/api/experiment_stages';
-        if (projectId) {
-            payload.project_id = projectId;
-        } else if (experimentId) {
-            payload.experiment_id = experimentId;
+
+        const endpoint = resolvedProjId ? '/api/project_stages' : '/api/experiment_stages';
+        if (resolvedProjId) {
+            payload.project_id = resolvedProjId;
+        } else if (resolvedExpId) {
+            payload.experiment_id = resolvedExpId;
         } else {
-            showAlert('Experiment ID is required for experiment stages', 'Error');
+            showAlert('No experiment selected — open an experiment first before adding stages.', 'Error');
             return;
         }
+
         try {
             const r = await apiFetch(endpoint, {
                 method: 'POST',
@@ -2078,8 +2769,13 @@ function openManageExperimentStages(projectId = null, experimentId = null) {
                 body: JSON.stringify(payload)
             });
             if (r.ok) {
-                showAlert('Stage created', 'Success');
-                loadExperimentStages(projectId || currentProjectId);
+                showAlert('Stage created successfully', 'Success');
+                // Reload the right list depending on context
+                if (resolvedExpId) {
+                    loadExperimentStagesList(resolvedExpId);
+                } else if (resolvedProjId) {
+                    loadExperimentStages(resolvedProjId);
+                }
             } else {
                 showAlert('Error creating stage', 'Error');
             }
@@ -2562,26 +3258,11 @@ async function updateExperimentOutcome(logId, outcome, event) {
 }
 
 async function addExperiment() {
-    // Fetch available project stages for this project to allow linking experiment to a stage
-    let stageOptions = [];
-    if (currentProjectId) {
-        try {
-            const stResp = await apiFetch(`/api/project_stages?project_id=${currentProjectId}&limit=200`);
-            const stData = await stResp.json();
-            const stages = stData.data || [];
-            stageOptions = [{ label: 'None', value: '' }].concat(stages.map(s => ({ label: s.stage_name || s.name || `Stage ${s.id}`, value: String(s.id) })));
-        } catch (err) {
-            console.error('Error fetching project stages for experiment creation:', err);
-            stageOptions = [{ label: 'None', value: '' }];
-        }
-    }
-
     const result = await showMultiField([
         { name: 'title', label: 'Experiment Title', type: 'text', placeholder: 'Enter experiment title...' },
         { name: 'description', label: 'Description', type: 'textarea', rows: 4, placeholder: 'Enter experiment description...' },
-        { name: 'stage_id', label: 'Stage', type: 'select', options: stageOptions },
         { name: 'expected_outcome', label: 'Expected Outcome', type: 'textarea', rows: 2, placeholder: 'What do you expect to happen?' }
-    ], 'Add Experiment', 'Enter experiment details:');
+    ], 'New Experiment', 'Enter experiment details:');
     
     if (!result || !result.title) return;
     
@@ -2603,7 +3284,6 @@ async function addExperiment() {
     }
     
     try {
-        if (result.stage_id) payload.stage_id = result.stage_id ? Number(result.stage_id) : null;
         const response = await apiFetch('/api/logs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3412,9 +4092,15 @@ async function uploadDocument(file) {
         formData.append('title', title);
         formData.append('file_type', file_type);
         
-        // Add project_id if we're in a project context
+        // Add context parameters
         if (currentProjectId) {
             formData.append('project_id', currentProjectId);
+        }
+        if (currentExperimentId) {
+            formData.append('experiment_id', currentExperimentId);
+        }
+        if (currentStageId) {
+            formData.append('stage_id', currentStageId);
         }
         
         // Show upload progress
@@ -3618,7 +4304,17 @@ async function loadNoteInEditor(noteId, navigate = true) {
         if (note) {
             document.getElementById('notebook-editor-title').value = note.title;
             document.getElementById('notebook-editor-title').dataset.noteId = noteId;
-            document.getElementById('notebook-editor-content').innerHTML = note.content;
+
+            // Detect raw markdown: if content doesn't start with an HTML tag,
+            // treat it as markdown and parse it to rich HTML before displaying.
+            let noteContent = note.content || '';
+            const looksLikeHtml = /^\s*<[a-zA-Z]/.test(noteContent);
+            if (!looksLikeHtml && noteContent.trim().length > 0) {
+                noteContent = parseMarkdownAndMath(noteContent);
+            }
+            const editorEl = document.getElementById('notebook-editor-content');
+            editorEl.innerHTML = noteContent;
+            renderMath(editorEl);
             
             // Load drawing data if present
             if (note.drawing_data) {
@@ -4056,7 +4752,54 @@ async function loadFindings() {
 }
 
 async function addFinding() {
-    const result = await showMultiField([
+    let stageOptions = [{ value: '', label: 'None' }];
+    if (currentProjectId) {
+        try {
+            // First fetch project's experiments to know which stages belong to this project
+            const expResp = await apiFetch(`/api/logs?project_id=${currentProjectId}&limit=200`);
+            const expData = await expResp.json();
+            const experiments = expData.data || [];
+            const expIds = experiments.map(e => e.id);
+            
+            // Fetch all stages
+            const stResp = await apiFetch(`/api/experiment_stages?limit=200`);
+            const stData = await stResp.json();
+            const stages = stData.data || [];
+            
+            // Filter stages by experiment IDs belonging to the project
+            stages.forEach(s => {
+                if (expIds.includes(s.experiment_id)) {
+                    const exp = experiments.find(e => e.id === s.experiment_id);
+                    const expTitle = exp ? exp.log_title : `Exp ${s.experiment_id}`;
+                    stageOptions.push({
+                        value: `${s.experiment_id}:${s.id}`,
+                        label: `${s.stage_name || 'Stage'} (${expTitle})`
+                    });
+                }
+            });
+        } catch (err) {
+            console.error('Error loading stages for finding:', err);
+        }
+    }
+    
+    if (currentExperimentId) {
+        try {
+            const stResp = await apiFetch(`/api/experiment_stages?experiment_id=${currentExperimentId}&limit=200`);
+            const stData = await stResp.json();
+            const stages = stData.data || [];
+            stageOptions = [{ value: '', label: 'None' }];
+            stages.forEach(s => {
+                stageOptions.push({
+                    value: `${currentExperimentId}:${s.id}`,
+                    label: s.stage_name || 'Stage'
+                });
+            });
+        } catch (err) {
+            console.error('Error loading stages for finding:', err);
+        }
+    }
+
+    const fields = [
         { name: 'title', label: 'Finding Title', type: 'text', placeholder: 'Enter finding title...' },
         { name: 'description', label: 'Description', type: 'textarea', rows: 3, placeholder: 'Enter description...' },
         { name: 'finding_type', label: 'Type', type: 'select', placeholder: 'Select type...', options: [
@@ -4064,11 +4807,23 @@ async function addFinding() {
             { value: 'problem', label: 'Problem' },
             { value: 'lesson', label: 'Lesson' }
         ]}
-    ], 'Add Finding', 'Enter finding details:');
+    ];
+    
+    if (stageOptions.length > 1) {
+        fields.push({
+            name: 'stage_info',
+            label: 'Link to Experiment Stage',
+            type: 'select',
+            options: stageOptions,
+            placeholder: 'Link to a stage...'
+        });
+    }
+
+    const result = await showMultiField(fields, 'Add Finding', 'Enter finding details:');
     
     if (!result || !result.title || !result.description) return;
     
-    const { title, description, finding_type } = result;
+    const { title, description, finding_type, stage_info } = result;
     
     try {
         const payload = { title, description, finding_type };
@@ -4078,6 +4833,14 @@ async function addFinding() {
             if (wsTitleEl) payload.project_name = wsTitleEl.textContent;
         }
 
+        if (stage_info) {
+            const [expId, stageId] = stage_info.split(':');
+            payload.experiment_id = parseInt(expId, 10);
+            payload.stage_id = parseInt(stageId, 10);
+        } else if (currentExperimentId) {
+            payload.experiment_id = currentExperimentId;
+        }
+        
         const response = await apiFetch('/api/findings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -5656,12 +6419,13 @@ async function exportChatToNotebook(button) {
 async function performExportToNotebook(content, values) {
     try {
         let entryId;
+        const parsedContent = parseMarkdownAndMath(content);
         
         if (values.entry_id === 'new') {
-            // Create new notebook entry with proper markdown formatting
+            // Create new notebook entry with proper markdown formatting converted to HTML
             const newEntryData = {
                 title: values.new_title || 'AI Chat Export',
-                content: content,
+                content: parsedContent,
                 entry_type: 'text',
                 project_id: currentProjectId || null,
                 experiment_id: currentExperimentId || null
@@ -5687,10 +6451,10 @@ async function performExportToNotebook(content, values) {
             const existingEntry = await existingEntryResponse.json();
             
             if (existingEntry && existingEntry.data) {
-                // Preserve existing content and append with proper markdown formatting
-                const separator = '\n\n---\n\n';
-                const header = '**AI Chat Response:**\n\n';
-                const updatedContent = existingEntry.data.content + separator + header + content;
+                // Preserve existing content and append with proper markdown formatting converted to HTML
+                const separator = '<hr><br>';
+                const header = '<p><strong>AI Chat Response:</strong></p>';
+                const updatedContent = existingEntry.data.content + separator + header + parsedContent;
                 
                 const updateResponse = await apiFetch(`/api/notebook/${values.entry_id}`, {
                     method: 'PUT',
@@ -5698,9 +6462,7 @@ async function performExportToNotebook(content, values) {
                     body: JSON.stringify({ content: updatedContent })
                 });
                 
-                const updateData = await updateResponse.json();
-                
-                // Check if update was successful (API returns {success: true} or similar)
+                // Check if update was successful
                 if (updateResponse.ok) {
                     showAlert('Appended AI response to notebook entry', 'Success');
                 } else {
@@ -6176,24 +6938,30 @@ async function autoSaveNotebookEntry() {
             const response = await apiFetch(`/api/notebook/${currentNoteId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title, content })
+                body: JSON.stringify({ title, content }),
+                skipErrorAlert: true
             });
             if (response.ok) {
                 lastSavedContent = currentContent;
                 updateSavedIndicator(true);
+            } else {
+                updateSavedIndicator(false);
             }
         } else {
             // Create new entry
             const response = await apiFetch('/api/notebook', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title, content })
+                body: JSON.stringify({ title, content }),
+                skipErrorAlert: true
             });
             if (response.ok) {
                 const data = await response.json();
                 currentNoteId = data.id;
                 lastSavedContent = currentContent;
                 updateSavedIndicator(true);
+            } else {
+                updateSavedIndicator(false);
             }
         }
     } catch (error) {
@@ -7773,6 +8541,28 @@ function handleAIInput(event) {
 let aiConversationHistory = [];
 let aiSessionId = 'default';
 
+// Voice recognition and TTS state
+let isRecording = false;
+let recognition = null;
+let ttsEnabled = false;
+let synthesis = window.speechSynthesis;
+let currentUtterance = null;
+let voicesLoaded = false;
+
+// Load voices when they become available
+if (synthesis) {
+    synthesis.onvoiceschanged = () => {
+        voicesLoaded = true;
+    };
+    // Try to load voices immediately in case they're already available
+    synthesis.getVoices();
+}
+
+// Notebook voice input state
+let notebookRecognition = null;
+let notebookIsRecording = false;
+let notebookTtsEnabled = false;
+
 async function loadChatHistory() {
     try {
         const response = await apiFetch(`/api/ai/chat-history?session_id=${aiSessionId}`);
@@ -7841,59 +8631,179 @@ async function startNewChat() {
     const container = document.getElementById('ai-chat-container');
     container.innerHTML = '';
     showDefaultWelcomeMessage();
-    
-    showAlert('Started new chat session', 'Success');
 }
 
-async function showChatSessions() {
+function toggleChatHistoryDropdown() {
+    const dropdown = document.getElementById('chat-history-dropdown');
+    const isVisible = dropdown.style.display !== 'none';
+    
+    if (isVisible) {
+        dropdown.style.display = 'none';
+    } else {
+        loadChatSessionsToDropdown();
+        dropdown.style.display = 'block';
+    }
+}
+
+async function loadChatSessionsToDropdown() {
+    const dropdownList = document.getElementById('chat-history-list');
+    dropdownList.innerHTML = '<div class="dropdown-item-empty">Loading…</div>';
+
     try {
         const response = await apiFetch('/api/ai/chat-sessions');
         const data = await response.json();
-        
+
+        dropdownList.innerHTML = '';
+
+        // Helper to build one session row
+        const buildSessionItem = (sessionId, title, msgCount, timeAgo, isActive) => {
+            const item = document.createElement('div');
+            item.className = 'chat-session-item' + (isActive ? ' active-session' : '');
+            item.dataset.sessionId = sessionId;
+
+            const chatIconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
+            const trashIconSvg = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4h6v2"></path></svg>`;
+
+            item.innerHTML = `
+                <div class="chat-session-icon">${chatIconSvg}</div>
+                <div class="chat-session-info">
+                    <div class="chat-session-title" title="${title}">${title}</div>
+                    <div class="chat-session-meta">
+                        <span class="chat-session-count">${msgCount} msg${msgCount !== 1 ? 's' : ''}</span>
+                        <span>·</span>
+                        <span>${timeAgo}</span>
+                    </div>
+                </div>
+                <button class="chat-session-delete" title="Delete this chat" data-sid="${sessionId}">${trashIconSvg}</button>
+            `;
+
+            // Click on the row body => switch session
+            item.addEventListener('click', async (e) => {
+                if (e.target.closest('.chat-session-delete')) return; // let delete handle it
+                await switchToSession(sessionId);
+                toggleChatHistoryDropdown();
+            });
+
+            // Click on delete button
+            item.querySelector('.chat-session-delete').addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await deleteChatSession(sessionId);
+            });
+
+            return item;
+        };
+
         if (!data || !data.data || data.data.length === 0) {
-            showAlert('No previous chat sessions found', 'Info');
+            // Show "current unsaved session" if we have messages
+            if (aiConversationHistory.length > 0) {
+                const currentItem = buildSessionItem(
+                    aiSessionId,
+                    'Current session',
+                    aiConversationHistory.length,
+                    'just now',
+                    true
+                );
+                dropdownList.appendChild(currentItem);
+            } else {
+                dropdownList.innerHTML = '<div class="dropdown-item-empty">No previous chat sessions</div>';
+            }
             return;
         }
-        
+
         const sessions = data.data;
-        
-        // Create session options for modal
-        const sessionOptions = sessions.map(session => ({
-            value: session.session_id,
-            label: `Chat (${new Date(session.last_message).toLocaleString()}) - ${session.message_count} messages`
-        }));
-        
-        // Add current session if it's not in the list
+
+        // Prepend current unsaved session if not yet persisted
         if (!sessions.find(s => s.session_id === aiSessionId) && aiConversationHistory.length > 0) {
-            sessionOptions.unshift({
-                value: aiSessionId,
-                label: `Current Session - ${aiConversationHistory.length} messages`
-            });
+            const currentItem = buildSessionItem(
+                aiSessionId,
+                'Current session',
+                aiConversationHistory.length,
+                'just now',
+                true
+            );
+            dropdownList.appendChild(currentItem);
         }
-        
-        showModal({
-            type: 'multi',
-            title: 'Chat History',
-            message: 'Select a previous chat session to load:',
-            fields: [
-                { 
-                    name: 'session_id', 
-                    label: 'Previous Sessions', 
-                    type: 'select', 
-                    options: sessionOptions
-                }
-            ],
-            callback: async (values) => {
-                if (values && values.session_id) {
-                    await switchToSession(values.session_id);
-                }
+
+        sessions.forEach(session => {
+            let title = 'New chat';
+            if (session.first_message) {
+                const words = session.first_message.trim().split(/\s+/).slice(0, 6).join(' ');
+                title = words.length < session.first_message.length ? words + '…' : words;
             }
+            const timeAgo = getRelativeTime(new Date(session.last_message));
+            const isActive = session.session_id === aiSessionId;
+            const item = buildSessionItem(session.session_id, title, session.message_count || 0, timeAgo, isActive);
+            dropdownList.appendChild(item);
         });
+
     } catch (e) {
         console.error('Error loading chat sessions:', e);
-        showAlert('Failed to load chat sessions', 'Error');
+        dropdownList.innerHTML = '<div class="dropdown-item-empty">Failed to load sessions</div>';
     }
 }
+
+async function deleteChatSession(sessionId) {
+    const confirmed = await showConfirm('Delete this chat history? This cannot be undone.');
+    if (!confirmed) return;
+
+    try {
+        const resp = await apiFetch(`/api/ai/chat-history?session_id=${encodeURIComponent(sessionId)}`, {
+            method: 'DELETE'
+        });
+        const result = await resp.json();
+
+        if (result.success) {
+            // If deleting the active session, start a fresh chat
+            if (sessionId === aiSessionId) {
+                await startNewChat();
+            }
+            // Refresh the dropdown list
+            await loadChatSessionsToDropdown();
+        } else {
+            showAlert('Failed to delete chat history.', 'Error');
+        }
+    } catch (e) {
+        console.error('Error deleting chat session:', e);
+        showAlert('Error deleting chat history.', 'Error');
+    }
+}
+
+function getRelativeTime(date) {
+    const now = new Date();
+    const diffMs = now - date;
+    const diffSecs = Math.floor(diffMs / 1000);
+    const diffMins = Math.floor(diffSecs / 60);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    const diffMonths = Math.floor(diffDays / 30);
+    const diffYears = Math.floor(diffDays / 365);
+    
+    if (diffSecs < 60) {
+        return `${diffSecs}s ago`;
+    } else if (diffMins < 60) {
+        return `${diffMins}min ago`;
+    } else if (diffHours < 24) {
+        return `${diffHours}hrs ago`;
+    } else if (diffDays < 30) {
+        return `${diffDays}day${diffDays > 1 ? 's' : ''} ago`;
+    } else if (diffMonths < 12) {
+        return `${diffMonths}month${diffMonths > 1 ? 's' : ''} ago`;
+    } else {
+        return `${diffYears}year${diffYears > 1 ? 's' : ''} ago`;
+    }
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', (e) => {
+    const dropdown = document.getElementById('chat-history-dropdown');
+    const toggleBtn = document.querySelector('.dropdown-toggle');
+    
+    if (dropdown && dropdown.style.display !== 'none') {
+        if (!dropdown.contains(e.target) && !toggleBtn.contains(e.target)) {
+            dropdown.style.display = 'none';
+        }
+    }
+});
 
 async function switchToSession(sessionId) {
     // Switch to selected session
@@ -7901,8 +8811,733 @@ async function switchToSession(sessionId) {
     
     // Load chat history for the selected session
     await loadChatHistory();
+}
+
+function toggleVoiceInput() {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+        showAlert('Speech recognition is not supported in your browser', 'Error');
+        return;
+    }
     
-    showAlert('Switched to chat session', 'Success');
+    const voiceBtn = document.getElementById('ai-voice-btn');
+    
+    if (isRecording) {
+        stopRecording();
+    } else {
+        startRecording();
+    }
+}
+
+function startRecording() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    
+    if (!recognition) {
+        recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+        
+        recognition.onresult = (event) => {
+            const transcript = event.results[event.results.length - 1][0].transcript;
+            const input = document.getElementById('ai-input');
+            input.value = input.value + (input.value ? ' ' : '') + transcript;
+            input.style.height = 'auto';
+            autoResizeTextarea(input);
+        };
+        
+        recognition.onerror = (event) => {
+            console.error('Speech recognition error:', event.error);
+            if (event.error === 'not-allowed') {
+                showAlert('Microphone access denied. Please allow microphone access.', 'Error');
+                stopRecording();
+            }
+        };
+        
+        recognition.onend = () => {
+            // Restart if still recording (continuous mode)
+            if (isRecording) {
+                try {
+                    recognition.start();
+                } catch (e) {
+                    console.error('Error restarting recognition:', e);
+                    isRecording = false;
+                    const voiceBtn = document.getElementById('ai-voice-btn');
+                    if (voiceBtn) {
+                        voiceBtn.classList.remove('recording');
+                    }
+                }
+            }
+        };
+    }
+    
+    try {
+        recognition.start();
+        isRecording = true;
+        const voiceBtn = document.getElementById('ai-voice-btn');
+        voiceBtn.classList.add('recording');
+    } catch (e) {
+        console.error('Error starting recognition:', e);
+    }
+}
+
+function stopRecording() {
+    if (recognition) {
+        try {
+            recognition.stop();
+        } catch (e) {
+            console.error('Error stopping recognition:', e);
+        }
+    }
+    isRecording = false;
+    const voiceBtn = document.getElementById('ai-voice-btn');
+    if (voiceBtn) {
+        voiceBtn.classList.remove('recording');
+    }
+}
+
+function toggleTTS() {
+    ttsEnabled = !ttsEnabled;
+    const ttsBtn = document.getElementById('ai-tts-btn');
+    
+    if (ttsEnabled) {
+        ttsBtn.classList.add('active');
+    } else {
+        ttsBtn.classList.remove('active');
+        synthesis.cancel(); // Stop any ongoing speech
+    }
+}
+
+function speakText(text) {
+    if (!ttsEnabled || !text) return;
+    
+    // Cancel any ongoing speech
+    synthesis.cancel();
+    
+    // Create new utterance
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    
+    // Try to use a natural voice
+    const voices = synthesis.getVoices();
+    if (voices.length > 0) {
+        // Prefer a female voice if available
+        const preferredVoice = voices.find(voice => 
+            voice.name.includes('Female') || 
+            voice.name.includes('Samantha') ||
+            voice.name.includes('Google US English')
+        );
+        if (preferredVoice) {
+            utterance.voice = preferredVoice;
+        }
+    }
+    
+    synthesis.speak(utterance);
+}
+
+function readMessageAloud(button) {
+    if (!synthesis) {
+        showAlert('Speech synthesis is not supported in your browser', 'Error');
+        return;
+    }
+    
+    // If this button is paused, resume
+    if (button.classList.contains('paused')) {
+        synthesis.resume();
+        button.classList.remove('paused');
+        button.classList.add('speaking');
+        updateTTSStatus(button, 'Playing');
+        return;
+    }
+    
+    // If this button is speaking, pause it
+    if (button.classList.contains('speaking')) {
+        synthesis.pause();
+        button.classList.remove('speaking');
+        button.classList.add('paused');
+        updateTTSStatus(button, 'Paused');
+        return;
+    }
+    
+    // If any other button is speaking, cancel it
+    if (synthesis.speaking) {
+        synthesis.cancel();
+        // Clear speaking class from all buttons
+        document.querySelectorAll('.chat-action-btn[data-action="read-aloud"]').forEach(btn => {
+            btn.classList.remove('speaking');
+            btn.classList.remove('paused');
+            updateTTSStatus(btn, '');
+        });
+        // Wait a moment for cancel to take effect
+        setTimeout(() => {
+            startSpeaking(button);
+        }, 100);
+        return;
+    }
+    
+    startSpeaking(button);
+}
+
+function updateTTSStatus(button, status) {
+    const statusSpan = button.querySelector('.tts-status');
+    if (statusSpan) {
+        statusSpan.textContent = status;
+    }
+}
+
+// Add right-click to stop
+document.addEventListener('contextmenu', function(e) {
+    if (e.target.closest('.chat-action-btn[data-action="read-aloud"]')) {
+        e.preventDefault();
+        const button = e.target.closest('.chat-action-btn[data-action="read-aloud"]');
+        synthesis.cancel();
+        button.classList.remove('speaking');
+        button.classList.remove('paused');
+        updateTTSStatus(button, '');
+    }
+    
+    if (e.target.closest('#notebook-tts-btn')) {
+        e.preventDefault();
+        synthesis.cancel();
+        const ttsBtn = document.getElementById('notebook-tts-btn');
+        if (ttsBtn) {
+            ttsBtn.classList.remove('active');
+            ttsBtn.classList.remove('paused');
+        }
+        updateNotebookTTSStatus('');
+        notebookTtsEnabled = false;
+    }
+});
+
+function startSpeaking(button) {
+    // Clear speaking class from all other buttons
+    document.querySelectorAll('.chat-action-btn[data-action="read-aloud"]').forEach(btn => {
+        btn.classList.remove('speaking');
+    });
+
+    const messageDiv = button.closest('.chat-message');
+    const chatBubble = messageDiv.querySelector('.chat-bubble');
+    
+    // Get the text content from the chat bubble
+    let text = chatBubble.textContent || chatBubble.innerText;
+    
+    // If the message has rawResponse stored (for AI messages), use that
+    if (messageDiv.dataset.rawResponse) {
+        text = messageDiv.dataset.rawResponse;
+    }
+    
+    // Remove duplicate consecutive content (common in HTML with hidden elements)
+    text = text.replace(/(.{10,})\1+/g, '$1');
+    
+    // Strip markdown for speech
+    const plainText = text
+        .replace(/#{1,6}\s/g, '') // Remove headers
+        .replace(/\*\*([^*]+)\*\*/g, '$1') // Remove bold
+        .replace(/\*([^*]+)\*/g, '$1') // Remove italic
+        .replace(/`([^`]+)`/g, '$1') // Remove inline code
+        .replace(/```[\s\S]*?```/g, '') // Remove code blocks
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Remove links
+        .replace(/\n+/g, ' ') // Replace newlines with spaces
+        .trim();
+    
+    // Apply STEM text normalization
+    const normalizedText = normalizeSTEMText(plainText);
+    
+    if (!normalizedText) {
+        showAlert('No text to read', 'Error');
+        return;
+    }
+    
+    console.log('AI Panel TTS: Plain text length:', plainText.length);
+    console.log('AI Panel TTS: Normalized text length:', normalizedText.length);
+    
+    // Resume synthesis if it's paused
+    if (synthesis.paused) {
+        synthesis.resume();
+    }
+    
+    // For long text, break it into chunks to avoid browser issues
+    const MAX_CHUNK_LENGTH = 1000; // Characters per chunk (increased for smoother playback)
+    let chunks = [];
+    
+    if (normalizedText.length > MAX_CHUNK_LENGTH) {
+        // Split by sentences to avoid cutting mid-sentence
+        const sentences = normalizedText.match(/[^.!?]+[.!?]+/g) || [normalizedText];
+        let currentChunk = '';
+        
+        sentences.forEach(sentence => {
+            if ((currentChunk + sentence).length <= MAX_CHUNK_LENGTH) {
+                currentChunk += sentence;
+            } else {
+                if (currentChunk) chunks.push(currentChunk);
+                currentChunk = sentence;
+            }
+        });
+        if (currentChunk) chunks.push(currentChunk);
+        
+        console.log('AI Panel TTS: Split into', chunks.length, 'chunks');
+    } else {
+        chunks = [normalizedText];
+    }
+    
+    // Speak chunks sequentially
+    let chunkIndex = 0;
+    
+    function speakNextChunk() {
+        if (chunkIndex >= chunks.length) {
+            console.log('AI Panel TTS: All chunks spoken');
+            button.classList.remove('speaking');
+            updateTTSStatus(button, '');
+            return;
+        }
+        
+        const chunk = chunks[chunkIndex];
+        console.log('AI Panel TTS: Speaking chunk', chunkIndex + 1, 'of', chunks.length);
+        
+        const utterance = new SpeechSynthesisUtterance(chunk);
+        utterance.rate = 1;
+        utterance.pitch = 1;
+        utterance.volume = 1;
+        
+        // Try to use a natural voice
+        const voices = synthesis.getVoices();
+        if (voices.length > 0) {
+            const preferredVoice = voices.find(voice => 
+                voice.name.includes('Female') || 
+                voice.name.includes('Samantha') ||
+                voice.name.includes('Google US English')
+            );
+            if (preferredVoice) {
+                utterance.voice = preferredVoice;
+            } else {
+                utterance.voice = voices[0];
+            }
+        }
+        
+        utterance.onstart = () => {
+            console.log('AI Panel TTS: Chunk', chunkIndex + 1, 'started');
+        };
+        
+        utterance.onend = () => {
+            console.log('AI Panel TTS: Chunk', chunkIndex + 1, 'ended');
+            chunkIndex++;
+            speakNextChunk();
+        };
+        
+        utterance.onerror = (event) => {
+            console.error('AI Panel TTS: Chunk', chunkIndex + 1, 'error:', event);
+            button.classList.remove('speaking');
+            // Don't show alert for interrupted errors (user stopped it)
+            if (event.error !== 'interrupted') {
+                showAlert('Error playing audio: ' + event.error, 'Error');
+            }
+        };
+        
+        synthesis.speak(utterance);
+    }
+    
+    button.classList.add('speaking');
+    updateTTSStatus(button, 'Playing');
+    // Start speaking the first chunk
+    speakNextChunk();
+}
+
+function toggleNotebookVoiceInput() {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+        showAlert('Speech recognition is not supported in your browser', 'Error');
+        return;
+    }
+    
+    const voiceBtn = document.getElementById('notebook-voice-btn');
+    
+    if (notebookIsRecording) {
+        stopNotebookRecording();
+    } else {
+        startNotebookRecording();
+    }
+}
+
+function startNotebookRecording() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    
+    if (!notebookRecognition) {
+        notebookRecognition = new SpeechRecognition();
+        notebookRecognition.continuous = true;
+        notebookRecognition.interimResults = false;
+        notebookRecognition.lang = 'en-US';
+        
+        notebookRecognition.onresult = (event) => {
+            const transcript = event.results[event.results.length - 1][0].transcript;
+            const textarea = document.querySelector('.notebook-editor-textarea');
+            if (textarea) {
+                // Ensure a space separator if there is already content and it doesn't end in space/br
+                const endsWithSpace = /[\s\u00a0]$/.test(textarea.innerText) || textarea.innerHTML.endsWith('<br>');
+                const space = (textarea.innerHTML.trim().length > 0 && !endsWithSpace) ? ' ' : '';
+                
+                // Append text node safely to keep existing HTML structures intact
+                const textNode = document.createTextNode(space + transcript);
+                textarea.appendChild(textNode);
+                textarea.dispatchEvent(new Event('input'));
+            }
+        };
+        
+        notebookRecognition.onerror = (event) => {
+            console.error('Speech recognition error:', event.error);
+            if (event.error === 'not-allowed') {
+                showAlert('Microphone access denied. Please allow microphone access.', 'Error');
+                stopNotebookRecording();
+            }
+        };
+        
+        notebookRecognition.onend = () => {
+            // Restart if still recording (continuous mode)
+            if (notebookIsRecording) {
+                try {
+                    notebookRecognition.start();
+                } catch (e) {
+                    console.error('Error restarting recognition:', e);
+                    notebookIsRecording = false;
+                    const voiceBtn = document.getElementById('notebook-voice-btn');
+                    if (voiceBtn) {
+                        voiceBtn.classList.remove('recording');
+                    }
+                }
+            }
+        };
+    }
+    
+    try {
+        notebookRecognition.start();
+        notebookIsRecording = true;
+        const voiceBtn = document.getElementById('notebook-voice-btn');
+        voiceBtn.classList.add('recording');
+    } catch (e) {
+        console.error('Error starting recognition:', e);
+    }
+}
+
+function stopNotebookRecording() {
+    if (notebookRecognition) {
+        try {
+            notebookRecognition.stop();
+        } catch (e) {
+            console.error('Error stopping recognition:', e);
+        }
+    }
+    notebookIsRecording = false;
+    const voiceBtn = document.getElementById('notebook-voice-btn');
+    if (voiceBtn) {
+        voiceBtn.classList.remove('recording');
+    }
+}
+
+function toggleNotebookTTS() {
+    const ttsBtn = document.getElementById('notebook-tts-btn');
+    
+    // If paused, resume
+    if (ttsBtn.classList.contains('paused')) {
+        synthesis.resume();
+        ttsBtn.classList.remove('paused');
+        ttsBtn.classList.add('active');
+        updateNotebookTTSStatus('Playing');
+        return;
+    }
+    
+    // If active (speaking), pause
+    if (ttsBtn.classList.contains('active')) {
+        synthesis.pause();
+        ttsBtn.classList.remove('active');
+        ttsBtn.classList.add('paused');
+        updateNotebookTTSStatus('Paused');
+        return;
+    }
+    
+    // If not active, start speaking
+    notebookTtsEnabled = true;
+    ttsBtn.classList.add('active');
+    updateNotebookTTSStatus('Playing');
+    readNotebookContent();
+}
+
+function updateNotebookTTSStatus(status) {
+    const statusSpan = document.querySelector('.notebook-tts-status');
+    if (statusSpan) {
+        statusSpan.textContent = status;
+    }
+}
+
+// STEM Text Normalization for TTS
+function normalizeSTEMText(text) {
+    let normalized = text;
+    
+    // Greek letters
+    normalized = normalized.replace(/Δ/g, 'delta');
+    normalized = normalized.replace(/θ/g, 'theta');
+    normalized = normalized.replace(/λ/g, 'lambda');
+    normalized = normalized.replace(/Ω/g, 'ohms');
+    normalized = normalized.replace(/µ/g, 'micro');
+    normalized = normalized.replace(/α/g, 'alpha');
+    normalized = normalized.replace(/β/g, 'beta');
+    normalized = normalized.replace(/γ/g, 'gamma');
+    normalized = normalized.replace(/δ/g, 'delta');
+    normalized = normalized.replace(/ε/g, 'epsilon');
+    normalized = normalized.replace(/π/g, 'pi');
+    normalized = normalized.replace(/ρ/g, 'rho');
+    normalized = normalized.replace(/σ/g, 'sigma');
+    normalized = normalized.replace(/τ/g, 'tau');
+    normalized = normalized.replace(/φ/g, 'phi');
+    normalized = normalized.replace(/ω/g, 'omega');
+    
+    // Mathematical symbols
+    normalized = normalized.replace(/≈/g, 'is approximately equal to');
+    normalized = normalized.replace(/±/g, 'plus or minus');
+    normalized = normalized.replace(/∞/g, 'infinity');
+    normalized = normalized.replace(/≠/g, 'is not equal to');
+    normalized = normalized.replace(/≤/g, 'is less than or equal to');
+    normalized = normalized.replace(/≥/g, 'is greater than or equal to');
+    normalized = normalized.replace(/√/g, 'the square root of');
+    normalized = normalized.replace(/∑/g, 'the summation of');
+    normalized = normalized.replace(/∫/g, 'the integral of');
+    normalized = normalized.replace(/∂/g, 'the partial derivative of');
+    normalized = normalized.replace(/∇/g, 'the gradient of');
+    normalized = normalized.replace(/→/g, 'approaches');
+    normalized = normalized.replace(/←/g, 'is assigned to');
+    normalized = normalized.replace(/≡/g, 'is identical to');
+    normalized = normalized.replace(/∝/g, 'is proportional to');
+    
+    // Units and measurements
+    normalized = normalized.replace(/°C/g, 'degrees Celsius');
+    normalized = normalized.replace(/°F/g, 'degrees Fahrenheit');
+    normalized = normalized.replace(/°K/g, 'degrees Kelvin');
+    normalized = normalized.replace(/°R/g, 'degrees Rankine');
+    normalized = normalized.replace(/°/g, 'degrees');
+    normalized = normalized.replace(/Ω/g, 'ohms');
+    normalized = normalized.replace(/μA/g, 'microamperes');
+    normalized = normalized.replace(/mA/g, 'milliamperes');
+    normalized = normalized.replace(/(\d+)\s*A/g, '$1 amperes');
+    normalized = normalized.replace(/(\d+)A/g, '$1 amperes');
+    normalized = normalized.replace(/μV/g, 'microvolts');
+    normalized = normalized.replace(/mV/g, 'millivolts');
+    normalized = normalized.replace(/kV/g, 'kilovolts');
+    normalized = normalized.replace(/(\d+)\s*V/g, '$1 volts');
+    normalized = normalized.replace(/(\d+)V/g, '$1 volts');
+    normalized = normalized.replace(/μW/g, 'microwatts');
+    normalized = normalized.replace(/mW/g, 'milliwatts');
+    normalized = normalized.replace(/kW/g, 'kilowatts');
+    normalized = normalized.replace(/MW/g, 'megawatts');
+    normalized = normalized.replace(/(\d+)\s*W/g, '$1 watts');
+    normalized = normalized.replace(/(\d+)W/g, '$1 watts');
+    normalized = normalized.replace(/Hz/g, 'hertz');
+    normalized = normalized.replace(/kHz/g, 'kilohertz');
+    normalized = normalized.replace(/MHz/g, 'megahertz');
+    normalized = normalized.replace(/GHz/g, 'gigahertz');
+    normalized = normalized.replace(/μF/g, 'microfarads');
+    normalized = normalized.replace(/nF/g, 'nanofarads');
+    normalized = normalized.replace(/pF/g, 'picofarads');
+    normalized = normalized.replace(/(\d+)\s*F/g, '$1 farads');
+    normalized = normalized.replace(/(\d+)F/g, '$1 farads');
+    normalized = normalized.replace(/μH/g, 'microhenries');
+    normalized = normalized.replace(/mH/g, 'millihenries');
+    normalized = normalized.replace(/(\d+)\s*H/g, '$1 henries');
+    normalized = normalized.replace(/(\d+)H/g, '$1 henries');
+    normalized = normalized.replace(/kΩ/g, 'kiloohms');
+    normalized = normalized.replace(/MΩ/g, 'megaohms');
+    
+    // Exponents and powers
+    normalized = normalized.replace(/x²/g, 'x squared');
+    normalized = normalized.replace(/x³/g, 'x cubed');
+    normalized = normalized.replace(/y²/g, 'y squared');
+    normalized = normalized.replace(/y³/g, 'y cubed');
+    normalized = normalized.replace(/z²/g, 'z squared');
+    normalized = normalized.replace(/z³/g, 'z cubed');
+    normalized = normalized.replace(/(\w+)\^2/g, '$1 squared');
+    normalized = normalized.replace(/(\w+)\^3/g, '$1 cubed');
+    normalized = normalized.replace(/(\w+)\^(\d+)/g, '$1 to the power of $2');
+    
+    // Function notation
+    normalized = normalized.replace(/f\(x\)/g, 'f of x');
+    normalized = normalized.replace(/g\(x\)/g, 'g of x');
+    normalized = normalized.replace(/h\(x\)/g, 'h of x');
+    normalized = normalized.replace(/(\w+)\((\w+)\)/g, '$1 of $2');
+    
+    // Fractions (simple cases)
+    normalized = normalized.replace(/½/g, 'one half');
+    normalized = normalized.replace(/⅓/g, 'one third');
+    normalized = normalized.replace(/⅔/g, 'two thirds');
+    normalized = normalized.replace(/¼/g, 'one quarter');
+    normalized = normalized.replace(/¾/g, 'three quarters');
+    normalized = normalized.replace(/⅕/g, 'one fifth');
+    normalized = normalized.replace(/⅖/g, 'two fifths');
+    normalized = normalized.replace(/⅗/g, 'three fifths');
+    normalized = normalized.replace(/⅘/g, 'four fifths');
+    
+    // Common scientific abbreviations
+    normalized = normalized.replace(/pH/g, 'P H');
+    normalized = normalized.replace(/DNA/g, 'D N A');
+    normalized = normalized.replace(/RNA/g, 'R N A');
+    normalized = normalized.replace(/ATP/g, 'A T P');
+    normalized = normalized.replace(/ADP/g, 'A D P');
+    normalized = normalized.replace(/CO₂/g, 'carbon dioxide');
+    normalized = normalized.replace(/H₂O/g, 'water');
+    normalized = normalized.replace(/NaCl/g, 'sodium chloride');
+    normalized = normalized.replace(/KCl/g, 'potassium chloride');
+    
+    // Chemical formulas (basic)
+    normalized = normalized.replace(/H₂/g, 'H two');
+    normalized = normalized.replace(/O₂/g, 'O two');
+    normalized = normalized.replace(/N₂/g, 'N two');
+    normalized = normalized.replace(/CO₂/g, 'C O two');
+    normalized = normalized.replace(/SO₂/g, 'S O two');
+    normalized = normalized.replace(/NO₂/g, 'N O two');
+    
+    // Percentages
+    normalized = normalized.replace(/%/g, 'percent');
+    
+    // Ratios
+    normalized = normalized.replace(/(\d+):(\d+)/g, '$1 to $2');
+    
+    return normalized;
+}
+
+function readNotebookContent() {
+    if (!synthesis) {
+        showAlert('Speech synthesis is not supported in your browser', 'Error');
+        return;
+    }
+    
+    const textarea = document.querySelector('.notebook-editor-textarea');
+    if (!textarea) {
+        console.error('Notebook TTS: Textarea not found');
+        return;
+    }
+    
+    // Get the text content - use innerText for better text extraction from HTML
+    let text = textarea.innerText || textarea.textContent;
+    
+    console.log('Notebook TTS: Raw text length:', text.length);
+    console.log('Notebook TTS: Raw text preview:', text.substring(0, 100));
+    
+    // Remove duplicate consecutive content (common in HTML with hidden elements)
+    text = text.replace(/(.{10,})\1+/g, '$1');
+    
+    // Strip markdown for speech
+    const plainText = text
+        .replace(/#{1,6}\s/g, '') // Remove headers
+        .replace(/\*\*([^*]+)\*\*/g, '$1') // Remove bold
+        .replace(/\*([^*]+)\*/g, '$1') // Remove italic
+        .replace(/`([^`]+)`/g, '$1') // Remove inline code
+        .replace(/```[\s\S]*?```/g, '') // Remove code blocks
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Remove links
+        .replace(/\n+/g, ' ') // Replace newlines with spaces
+        .trim();
+    
+    // Apply STEM text normalization
+    const normalizedText = normalizeSTEMText(plainText);
+    
+    if (!normalizedText) {
+        showAlert('No text to read', 'Error');
+        return;
+    }
+    
+    console.log('Notebook TTS: Speaking text:', normalizedText.substring(0, 50) + '...');
+    console.log('Notebook TTS: Plain text length:', plainText.length);
+    console.log('Notebook TTS: Normalized text length:', normalizedText.length);
+    
+    // Cancel any ongoing speech
+    synthesis.cancel();
+    
+    // Resume synthesis if it's paused
+    if (synthesis.paused) {
+        synthesis.resume();
+    }
+    
+    // For long text, break it into chunks to avoid browser issues
+    const MAX_CHUNK_LENGTH = 1000; // Characters per chunk (increased for smoother playback)
+    let chunks = [];
+    
+    if (normalizedText.length > MAX_CHUNK_LENGTH) {
+        // Split by sentences to avoid cutting mid-sentence
+        const sentences = normalizedText.match(/[^.!?]+[.!?]+/g) || [normalizedText];
+        let currentChunk = '';
+        
+        sentences.forEach(sentence => {
+            if ((currentChunk + sentence).length <= MAX_CHUNK_LENGTH) {
+                currentChunk += sentence;
+            } else {
+                if (currentChunk) chunks.push(currentChunk);
+                currentChunk = sentence;
+            }
+        });
+        if (currentChunk) chunks.push(currentChunk);
+        
+        console.log('Notebook TTS: Split into', chunks.length, 'chunks');
+    } else {
+        chunks = [normalizedText];
+    }
+    
+    // Speak chunks sequentially
+    let chunkIndex = 0;
+    
+    function speakNextChunk() {
+        if (chunkIndex >= chunks.length) {
+            console.log('Notebook TTS: All chunks spoken');
+            notebookTtsEnabled = false;
+            const ttsBtn = document.getElementById('notebook-tts-btn');
+            if (ttsBtn) ttsBtn.classList.remove('active');
+            updateNotebookTTSStatus('');
+            return;
+        }
+        
+        const chunk = chunks[chunkIndex];
+        console.log('Notebook TTS: Speaking chunk', chunkIndex + 1, 'of', chunks.length);
+        
+        const utterance = new SpeechSynthesisUtterance(chunk);
+        utterance.rate = 1;
+        utterance.pitch = 1;
+        utterance.volume = 1;
+        
+        // Try to use a natural voice
+        const voices = synthesis.getVoices();
+        if (voices.length > 0) {
+            const preferredVoice = voices.find(voice => 
+                voice.name.includes('Female') || 
+                voice.name.includes('Samantha') ||
+                voice.name.includes('Google US English')
+            );
+            if (preferredVoice) {
+                utterance.voice = preferredVoice;
+            } else {
+                utterance.voice = voices[0];
+            }
+        }
+        
+        utterance.onstart = () => {
+            console.log('Notebook TTS: Chunk', chunkIndex + 1, 'started');
+        };
+        
+        utterance.onend = () => {
+            console.log('Notebook TTS: Chunk', chunkIndex + 1, 'ended');
+            chunkIndex++;
+            speakNextChunk();
+        };
+        
+        utterance.onerror = (event) => {
+            console.error('Notebook TTS: Chunk', chunkIndex + 1, 'error:', event);
+            notebookTtsEnabled = false;
+            const ttsBtn = document.getElementById('notebook-tts-btn');
+            if (ttsBtn) ttsBtn.classList.remove('active');
+            // Don't show alert for interrupted errors (user stopped it)
+            if (event.error !== 'interrupted') {
+                showAlert('Error playing audio: ' + event.error, 'Error');
+            }
+        };
+        
+        synthesis.speak(utterance);
+    }
+    
+    // Start speaking the first chunk
+    speakNextChunk();
 }
 
 function sendAIMessage() {
@@ -7938,10 +9573,19 @@ async function fetchGeminiChat(message, conversationHistory) {
         <div class="chat-avatar assistant-avatar">${assistantAvatar}</div>
         <div class="chat-content">
             <div class="chat-bubble assistant-bubble">
-                <p class="ai-streaming-text">Thinking...</p>
+                <div class="ai-typing-indicator">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
             </div>
             <div class="chat-actions">
-                <button class="chat-action-btn" onclick="exportChatToNotebook(this)" title="Export to Notebook">
+                <button class="chat-action-btn" data-action="read-aloud" title="Read Aloud">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 13 21 13 21 5 11 5"></polygon>
+                    </svg>
+                </button>
+                <button class="chat-action-btn" data-action="export-notebook" title="Export to Notebook">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                         <polyline points="14 2 14 8 20 8"></polyline>
@@ -7955,10 +9599,24 @@ async function fetchGeminiChat(message, conversationHistory) {
         </div>
     `;
     
+    // Add event listeners for action buttons
+    const readAloudBtn = messageDiv.querySelector('[data-action="read-aloud"]');
+    const exportBtn = messageDiv.querySelector('[data-action="export-notebook"]');
+    
+    if (readAloudBtn) {
+        readAloudBtn.addEventListener('click', () => readMessageAloud(readAloudBtn));
+    }
+    
+    if (exportBtn) {
+        exportBtn.addEventListener('click', () => exportChatToNotebook(exportBtn));
+    }
+    
     container.appendChild(messageDiv);
     container.scrollTop = container.scrollHeight;
     
-    const streamingText = messageDiv.querySelector('.ai-streaming-text');
+    const typingIndicator = messageDiv.querySelector('.ai-typing-indicator');
+    const chatBubble = messageDiv.querySelector('.chat-bubble');
+    let streamingText = null;
     let fullResponse = '';
     
     try {
@@ -7976,7 +9634,14 @@ async function fetchGeminiChat(message, conversationHistory) {
             throw new Error(errorData.detail || 'Failed to get AI response');
         }
         
-        streamingText.textContent = '';
+        // Replace typing indicator with streaming text
+        if (typingIndicator) {
+            typingIndicator.remove();
+        }
+        
+        streamingText = document.createElement('div');
+        streamingText.className = 'ai-streaming-text';
+        chatBubble.appendChild(streamingText);
         
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -7994,6 +9659,7 @@ async function fetchGeminiChat(message, conversationHistory) {
         // Convert markdown to HTML after streaming is complete
         if (typeof marked !== 'undefined') {
             streamingText.innerHTML = marked.parse(fullResponse);
+            renderMath(streamingText);
         }
         
         // Store the raw response for export
@@ -8002,9 +9668,46 @@ async function fetchGeminiChat(message, conversationHistory) {
         // Add to conversation history
         aiConversationHistory.push({ role: 'model', parts: [fullResponse] });
         
+        // Speak the response if TTS is enabled
+        if (ttsEnabled) {
+            // Strip markdown for speech
+            const plainText = fullResponse
+                .replace(/#{1,6}\s/g, '') // Remove headers
+                .replace(/\*\*([^*]+)\*\*/g, '$1') // Remove bold
+                .replace(/\*([^*]+)\*/g, '$1') // Remove italic
+                .replace(/`([^`]+)`/g, '$1') // Remove inline code
+                .replace(/```[\s\S]*?```/g, '') // Remove code blocks
+                .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Remove links
+                .replace(/\n+/g, ' ') // Replace newlines with spaces
+                .trim();
+            
+            speakText(plainText);
+        }
+        
     } catch (error) {
-        streamingText.textContent = `Error: ${error.message}. Make sure Google GenAI SDK is installed with: pip install google-generativeai`;
-        streamingText.style.color = 'var(--accent-red)';
+        // Remove typing indicator if still present
+        if (typingIndicator) {
+            typingIndicator.remove();
+        }
+        
+        // Create streaming text element for error message
+        if (!streamingText) {
+            streamingText = document.createElement('div');
+            streamingText.className = 'ai-streaming-text';
+            chatBubble.appendChild(streamingText);
+        }
+        
+        // Ask user if they want to retry
+        const shouldRetry = confirm(`Error: ${error.message}\n\nWould you like to retry?`);
+        
+        if (shouldRetry) {
+            // Remove the error message and retry
+            messageDiv.remove();
+            fetchGeminiChat(message, conversationHistory);
+        } else {
+            streamingText.textContent = `Error: ${error.message}`;
+            streamingText.style.color = 'var(--accent-red)';
+        }
     }
 }
 
@@ -8024,18 +9727,75 @@ function addAIMessage(message, type) {
     const avatar = type === 'assistant' ? assistantAvatar : userAvatar;
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     
+    let contentHTML = '';
+    if (type === 'assistant') {
+        // Parse markdown for assistant messages
+        contentHTML = parseMarkdownAndMath(message);
+    } else {
+        contentHTML = message;
+    }
+    
+    let actionsHTML = '';
+    if (type === 'assistant') {
+        actionsHTML = `
+            <div class="chat-actions">
+                <button class="chat-action-btn" data-action="read-aloud" title="Read Aloud">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 13 21 13 21 5 11 5"></polygon>
+                    </svg>
+                    <span class="tts-status"></span>
+                </button>
+                <button class="chat-action-btn" data-action="export-notebook" title="Export to Notebook">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                </button>
+            </div>
+        `;
+    }
+    
     messageDiv.innerHTML = `
         <div class="chat-avatar ${type}-avatar">${avatar}</div>
         <div class="chat-content">
             <div class="chat-bubble ${type}-bubble">
-                <p>${message}</p>
+                <div class="ai-streaming-text">${contentHTML}</div>
             </div>
+            ${actionsHTML}
             <div class="chat-time">${time}</div>
         </div>
     `;
     
+    // Store raw response for AI messages
+    if (type === 'assistant') {
+        messageDiv.dataset.rawResponse = message;
+    }
+    
+    // Add event listeners for action buttons
+    if (type === 'assistant') {
+        const readAloudBtn = messageDiv.querySelector('[data-action="read-aloud"]');
+        const exportBtn = messageDiv.querySelector('[data-action="export-notebook"]');
+        
+        if (readAloudBtn) {
+            readAloudBtn.addEventListener('click', () => readMessageAloud(readAloudBtn));
+        }
+        
+        if (exportBtn) {
+            exportBtn.addEventListener('click', () => exportChatToNotebook(exportBtn));
+        }
+    }
+    
     container.appendChild(messageDiv);
     container.scrollTop = container.scrollHeight;
+
+    // Render math equations in the newly appended bubble (must be in DOM first)
+    if (type === 'assistant') {
+        const bubble = messageDiv.querySelector('.ai-streaming-text');
+        if (bubble) renderMath(bubble);
+    }
 }
 
 // Tracking functionality

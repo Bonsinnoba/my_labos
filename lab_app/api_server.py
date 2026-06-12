@@ -101,6 +101,7 @@ class ProjectCreate(BaseModel):
     status: str = "Active"
     start_date: Optional[str] = None
     summary_findings: Optional[str] = None
+    project_outcome: Optional[str] = None
 
 
 class ProjectUpdate(BaseModel):
@@ -109,6 +110,7 @@ class ProjectUpdate(BaseModel):
     status: Optional[str] = None
     start_date: Optional[str] = None
     summary_findings: Optional[str] = None
+    project_outcome: Optional[str] = None
 
 
 class RdLogCreate(BaseModel):
@@ -117,6 +119,13 @@ class RdLogCreate(BaseModel):
     log_text: str
     cloud_file_url: Optional[str] = None
     is_downloaded_locally: bool = False
+    project_id: Optional[int] = None
+    stage_id: Optional[int] = None
+    outcome: Optional[str] = "PENDING"
+    expected_outcome: Optional[str] = None
+    actual_outcome: Optional[str] = None
+    findings: Optional[str] = None
+    conclusion: Optional[str] = None
 
 
 class RdLogUpdate(BaseModel):
@@ -125,6 +134,14 @@ class RdLogUpdate(BaseModel):
     log_text: Optional[str] = None
     cloud_file_url: Optional[str] = None
     is_downloaded_locally: Optional[bool] = None
+    project_id: Optional[int] = None
+    stage_id: Optional[int] = None
+    outcome: Optional[str] = None
+    expected_outcome: Optional[str] = None
+    actual_outcome: Optional[str] = None
+    findings: Optional[str] = None
+    conclusion: Optional[str] = None
+    status: Optional[str] = None
 
 
 class VoiceControl(BaseModel):
@@ -354,17 +371,25 @@ async def get_activities(limit: int = 20):
 # --- Documents & Knowledge Vault API ---
 
 @app.get("/api/documents")
-async def get_documents(project_id: Optional[int] = None, file_type: Optional[str] = None):
+async def get_documents(project_id: Optional[int] = None, file_type: Optional[str] = None,
+                        experiment_id: Optional[int] = None, stage_id: Optional[int] = None):
     """Get all documents, optionally filtered."""
     try:
-        docs = knowledge_vault.db.get_all_documents(project_id=project_id, file_type=file_type)
+        docs = db.get_all_documents(
+            project_id=project_id, 
+            file_type=file_type, 
+            experiment_id=experiment_id, 
+            stage_id=stage_id
+        )
         return {"documents": docs}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/documents")
-async def add_document(file: UploadFile = File(...), title: str = Form(...), file_type: str = Form(...), project_id: Optional[int] = Form(None)):
+async def add_document(file: UploadFile = File(...), title: str = Form(...), file_type: str = Form(...),
+                       project_id: Optional[int] = Form(None), experiment_id: Optional[int] = Form(None),
+                       stage_id: Optional[int] = Form(None)):
     """Add a new document to the knowledge vault."""
     try:
         documents_dir = "documents"
@@ -379,7 +404,7 @@ async def add_document(file: UploadFile = File(...), title: str = Form(...), fil
             while chunk := file.file.read(chunk_size):
                 buffer.write(chunk)
         
-        print(f"Uploading document: title={title}, file_type={file_type}, file_path={file_path}, project_id={project_id}")
+        print(f"Uploading document: title={title}, file_type={file_type}, file_path={file_path}, project_id={project_id}, experiment_id={experiment_id}, stage_id={stage_id}")
         
         doc_id = knowledge_vault.add_document(
             source_path=file_path,
@@ -388,7 +413,9 @@ async def add_document(file: UploadFile = File(...), title: str = Form(...), fil
             tags=None,
             project_id=project_id,
             component_id=None,
-            equipment_id=None
+            equipment_id=None,
+            experiment_id=experiment_id,
+            stage_id=stage_id
         )
         print(f"Document uploaded successfully with ID: {doc_id}")
         return {"id": doc_id, "message": "Document added successfully"}
@@ -477,8 +504,17 @@ async def get_notebook_entry(entry_id: int):
 async def add_notebook_entry(data: Dict[str, Any]):
     """Add a new notebook entry."""
     try:
+        # Prevent duplicate titles (case-insensitive)
+        title = data.get('title', '').strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="Title cannot be empty")
+        
+        existing = notebook.get_all_entries(limit=1000)
+        if any(e['title'].strip().lower() == title.lower() for e in existing):
+            raise HTTPException(status_code=400, detail=f"A notebook entry with the title '{title}' already exists.")
+
         entry_id = notebook.create_entry(
-            title=data['title'],
+            title=title,
             content=data['content'],
             entry_type=data.get('entry_type', 'text'),
             project_id=data.get('project_id'),
@@ -488,8 +524,10 @@ async def add_notebook_entry(data: Dict[str, Any]):
             voice_transcription=data.get('voice_transcription')
         )
         # Log activity
-        db.log_activity('created', 'notebook_entry', entry_id, data['title'])
+        db.log_activity('created', 'notebook_entry', entry_id, title)
         return {"id": entry_id, "message": "Entry added successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -498,9 +536,20 @@ async def add_notebook_entry(data: Dict[str, Any]):
 async def update_notebook_entry(entry_id: int, data: Dict[str, Any]):
     """Update a notebook entry."""
     try:
+        # Prevent duplicate titles (case-insensitive, excluding current note)
+        title = data.get('title')
+        if title is not None:
+            title = title.strip()
+            if not title:
+                raise HTTPException(status_code=400, detail="Title cannot be empty")
+            
+            existing = notebook.get_all_entries(limit=1000)
+            if any(e['title'].strip().lower() == title.lower() and e['id'] != entry_id for e in existing):
+                raise HTTPException(status_code=400, detail=f"A notebook entry with the title '{title}' already exists.")
+
         success = notebook.update_entry(
             entry_id=entry_id,
-            title=data.get('title'),
+            title=title,
             content=data.get('content'),
             entry_type=data.get('entry_type'),
             project_id=data.get('project_id'),
@@ -511,10 +560,12 @@ async def update_notebook_entry(entry_id: int, data: Dict[str, Any]):
         )
         if success:
             # Log activity
-            db.log_activity('updated', 'notebook_entry', entry_id, data.get('title', 'Unknown'))
+            db.log_activity('updated', 'notebook_entry', entry_id, title if title else 'Unknown')
             return {"message": "Entry updated successfully"}
         else:
             raise HTTPException(status_code=404, detail="Entry not found")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -689,10 +740,10 @@ async def add_maintenance_record(equipment_id: int, data: Dict[str, Any]):
 # --- Findings API ---
 
 @app.get("/api/findings")
-async def get_findings(project_id: Optional[int] = None):
-    """Get all findings, optionally filtered by project."""
+async def get_findings(project_id: Optional[int] = None, experiment_id: Optional[int] = None, stage_id: Optional[int] = None):
+    """Get all findings, optionally filtered by project, experiment, or stage."""
     try:
-        findings = findings_manager.get_all_findings(project_id=project_id)
+        findings = findings_manager.get_all_findings(project_id=project_id, experiment_id=experiment_id, stage_id=stage_id)
         return {"findings": findings}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -707,7 +758,12 @@ async def add_finding(data: Dict[str, Any]):
             description=data.get('description'),
             project_id=data.get('project_id'),
             finding_type=data.get('finding_type', 'observation'),
-            severity=data.get('severity', 'info')
+            severity=data.get('severity', 'info'),
+            root_cause=data.get('root_cause'),
+            solution=data.get('solution'),
+            recommendations=data.get('recommendations'),
+            experiment_id=data.get('experiment_id'),
+            stage_id=data.get('stage_id')
         )
         return {"id": finding_id, "message": "Finding added successfully"}
     except Exception as e:
@@ -951,7 +1007,8 @@ async def add_project(data: Dict[str, Any]):
             description=data.get('description'),
             status=data.get('status', 'Active'),
             start_date=data.get('start_date'),
-            summary_findings=data.get('summary_findings')
+            summary_findings=data.get('summary_findings'),
+            project_outcome=data.get('project_outcome')
         )
         return {"id": project_id, "message": "Project added successfully"}
     except Exception as e:
@@ -1002,6 +1059,26 @@ async def resume_project(project_id: int):
         if not success:
             raise HTTPException(status_code=404, detail="Project not found")
         return {"success": True, "status": "Active"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/projects/{project_id}/usage-summary")
+async def get_project_usage_summary(project_id: int):
+    """Get component and material usage summary for a project."""
+    try:
+        summary = db.get_project_usage_summary(project_id)
+        return {"success": True, "data": summary}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/experiments/{experiment_id}/usage-summary")
+async def get_experiment_usage_summary(experiment_id: int):
+    """Get component and material usage summary for an experiment."""
+    try:
+        summary = db.get_experiment_usage_summary(experiment_id)
+        return {"success": True, "data": summary}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1591,7 +1668,8 @@ async def create_rd_log(data: Dict[str, Any]):
                 outcome=data.get('outcome', 'PENDING'),
                 expected_outcome=data.get('expected_outcome'),
                 actual_outcome=data.get('actual_outcome'),
-                findings=data.get('findings')
+                findings=data.get('findings'),
+                conclusion=data.get('conclusion')
             )
         return {"success": True, "data": {"id": log_id}}
     except Exception as e:
