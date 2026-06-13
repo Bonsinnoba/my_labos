@@ -8,6 +8,9 @@ metadata) that can sync with a cloud PostgreSQL database asynchronously.
 
 import sqlite3
 import os
+import json
+import hashlib
+import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -15,15 +18,18 @@ from typing import Optional, List, Dict, Any
 class CacheDatabase:
     """Manages local SQLite database for offline-first lab application."""
     
-    def __init__(self, db_path: str = "local_cache.db"):
+    def __init__(self, db_path: str = "local_cache.db", device_id: Optional[str] = None):
         """
         Initialize the cache database.
         
         Args:
             db_path: Path to the SQLite database file. Defaults to 'local_cache.db'
                      in the current working directory.
+            device_id: Unique identifier for this workstation for mesh sync.
+                      If not provided, will generate one.
         """
         self.db_path = db_path
+        self.device_id = device_id or self._get_or_generate_device_id()
         self.conn: Optional[sqlite3.Connection] = None
         self._initialize_database()
     
@@ -138,6 +144,9 @@ class CacheDatabase:
 
             # Migration: Add experiment_id and stage_id to knowledge_vault
             self._migrate_knowledge_vault_add_exp_stage(cursor)
+
+            # Create mesh_transactions table for decentralized sync
+            self._create_mesh_transactions_table(cursor)
             
             self.conn.commit()
             print(f"Database initialized successfully at: {os.path.abspath(self.db_path)}")
@@ -805,112 +814,151 @@ class CacheDatabase:
             ON findings(project_id)
         """)
         
+    def _create_mesh_transactions_table(self, cursor: sqlite3.Cursor) -> None:
+        """
+        Create the mesh_transactions table for decentralized peer-to-peer synchronization.
+        
+        This table logs every data mutation chronologically for sync across multiple workstations.
+        
+        Args:
+            cursor: Database cursor
+        """
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_findings_status 
-            ON findings(status)
+            CREATE TABLE IF NOT EXISTS mesh_transactions (
+                tx_id TEXT PRIMARY KEY,
+                table_name TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                device_origin TEXT NOT NULL
+            )
+        """)
+        
+        # Create indexes for efficient querying
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_mesh_transactions_timestamp 
+            ON mesh_transactions(timestamp)
         """)
         
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tools_status 
-            ON tools(status)
+            CREATE INDEX IF NOT EXISTS idx_mesh_transactions_table 
+            ON mesh_transactions(table_name)
         """)
         
         cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tools_quantity 
-            ON tools(quantity)
+            CREATE INDEX IF NOT EXISTS idx_mesh_transactions_device 
+            ON mesh_transactions(device_origin)
         """)
         
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_materials_quantity 
-            ON materials(quantity)
-        """)
+        print("[db] mesh_transactions table created successfully")
+    
+    def _get_or_generate_device_id(self) -> str:
+        """
+        Get existing device ID from local storage or generate a new one.
         
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_equipment_usage_equipment 
-            ON equipment_usage(equipment_id)
-        """)
+        Returns:
+            Device ID string (e.g., 'LAB_PC_01')
+        """
+        from pathlib import Path
+        import uuid
         
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_equipment_usage_project 
-            ON equipment_usage(project_id)
-        """)
+        device_id_file = Path(".mesh_device_id")
         
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tool_usage_tool 
-            ON tool_usage(tool_id)
-        """)
+        if device_id_file.exists():
+            with open(device_id_file, 'r') as f:
+                return f.read().strip()
         
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tool_usage_project 
-            ON tool_usage(project_id)
-        """)
+        # Generate new device ID
+        device_id = f"LAB_PC_{uuid.uuid4().hex[:6].upper()}"
+        with open(device_id_file, 'w') as f:
+            f.write(device_id)
         
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_material_usage_material 
-            ON material_usage(material_id)
-        """)
+        print(f"[db] Generated new device ID: {device_id}")
+        return device_id
+    
+    def _log_mutation(self, 
+                     table_name: str,
+                     operation: str,
+                     payload: Dict[str, Any],
+                     record_id: Optional[int] = None) -> str:
+        """
+        Log a data mutation to the local mesh_transactions ledger.
         
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_material_usage_project 
-            ON material_usage(project_id)
-        """)
+        Args:
+            table_name: Name of the table being modified
+            operation: Type of operation ('INSERT', 'UPDATE', 'DELETE')
+            payload: JSON-serializable dict containing modified/mutated fields only
+            record_id: Optional ID of the record being modified
+            
+        Returns:
+            Transaction ID
+        """
+        # Generate transaction ID
+        tx_data = f"{table_name}{operation}{json.dumps(payload, sort_keys=True)}{time.time()}{self.device_id}"
+        tx_id = hashlib.sha256(tx_data.encode()).hexdigest()[:32]
         
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_funding_sources_type 
-            ON funding_sources(source_type)
-        """)
+        # Get current timestamp in milliseconds
+        timestamp = int(time.time() * 1000)
         
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_purchases_item 
-            ON purchases(item_type, item_id)
-        """)
+        # Add record_id to payload if provided
+        if record_id is not None:
+            payload['_record_id'] = record_id
         
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_purchases_funding 
-            ON purchases(funding_source_id)
-        """)
+        # Serialize payload to JSON
+        payload_json = json.dumps(payload)
         
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_purchases_date 
-            ON purchases(purchase_date)
-        """)
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO mesh_transactions (tx_id, table_name, operation, payload, timestamp, device_origin)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (tx_id, table_name, operation, payload_json, timestamp, self.device_id))
+            
+            self.conn.commit()
+            print(f"[db] Logged mutation: {operation} on {table_name} (tx_id: {tx_id})")
+            return tx_id
+            
+        except sqlite3.Error as e:
+            print(f"[db] Error logging mutation: {e}")
+            self.conn.rollback()
+            raise
+    
+    # Equipment CRUD Operations
+    
+    def add_equipment(self, name: str, model: str, status: str = "available",
+                     calibration_date: Optional[str] = None) -> int:
+        """
+        Add a new equipment entry to the database.
         
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_maintenance_costs_item 
-            ON maintenance_costs(item_type, item_id)
-        """)
-        
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_maintenance_costs_funding 
-            ON maintenance_costs(funding_source_id)
-        """)
-        
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_maintenance_costs_date 
-            ON maintenance_costs(maintenance_date)
-        """)
-        
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_calculations_project 
-            ON calculations(project_id)
-        """)
-        
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_relationships_source 
-            ON relationships(source_type, source_id)
-        """)
-        
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_relationships_target 
-            ON relationships(target_type, target_id)
-        """)
-        
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_component_usage_component 
-            ON component_usage(component_id)
-        """)
-        
-        print("[db] Phase 4 tables created successfully")
+        Args:
+            name: Equipment name
+            model: Equipment model
+            status: Equipment status (default: 'available')
+            calibration_date: Last calibration date
+            
+        Returns:
+            The ID of the inserted equipment
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                INSERT INTO equipment (name, model, status, calibration_date)
+                VALUES (?, ?, ?, ?)
+            """, (name, model, status, calibration_date))
+            self.conn.commit()
+            
+            # Log mutation for mesh sync
+            self._log_mutation('equipment', 'INSERT', {
+                'name': name,
+                'model': model,
+                'status': status,
+                'calibration_date': calibration_date
+            }, cursor.lastrowid)
+            
+            return cursor.lastrowid
+        except sqlite3.Error as e:
+            print(f"Error adding equipment: {e}")
+            raise
     
     # Asset Sync Log functions for deletion audit
     def record_asset_deletion(self, file_name: str) -> int:
@@ -1085,6 +1133,10 @@ class CacheDatabase:
             cursor = self.conn.cursor()
             cursor.execute(query, values)
             self.conn.commit()
+            
+            # Log mutation for mesh sync
+            self._log_mutation('equipment', 'UPDATE', kwargs, equipment_id)
+            
             return cursor.rowcount > 0
         except sqlite3.Error as e:
             print(f"Error updating equipment: {e}")
@@ -1104,6 +1156,10 @@ class CacheDatabase:
             cursor = self.conn.cursor()
             cursor.execute("DELETE FROM equipment WHERE id = ?", (equipment_id,))
             self.conn.commit()
+            
+            # Log mutation for mesh sync
+            self._log_mutation('equipment', 'DELETE', {'_record_id': equipment_id}, equipment_id)
+            
             return cursor.rowcount > 0
         except sqlite3.Error as e:
             print(f"Error deleting equipment: {e}")
@@ -1152,6 +1208,23 @@ class CacheDatabase:
                    cloud_file_url, int(is_downloaded_locally), outcome.upper(),
                    expected_outcome, actual_outcome, findings, conclusion))
             self.conn.commit()
+            
+            # Log mutation for mesh sync
+            self._log_mutation('rd_logs', 'INSERT', {
+                'project_name': project_name,
+                'project_id': project_id,
+                'stage_id': stage_id,
+                'log_title': log_title,
+                'log_text': log_text,
+                'cloud_file_url': cloud_file_url,
+                'is_downloaded_locally': is_downloaded_locally,
+                'outcome': outcome.upper(),
+                'expected_outcome': expected_outcome,
+                'actual_outcome': actual_outcome,
+                'findings': findings,
+                'conclusion': conclusion
+            }, cursor.lastrowid)
+            
             return cursor.lastrowid
         except sqlite3.Error as e:
             print(f"Error adding R&D log: {e}")
@@ -1686,6 +1759,10 @@ class CacheDatabase:
             cursor = self.conn.cursor()
             cursor.execute(query, values)
             self.conn.commit()
+            
+            # Log mutation for mesh sync
+            self._log_mutation('rd_logs', 'UPDATE', kwargs, log_id)
+            
             return cursor.rowcount > 0
         except sqlite3.Error as e:
             print(f"Error updating R&D log: {e}")
@@ -1717,6 +1794,10 @@ class CacheDatabase:
             cursor = self.conn.cursor()
             cursor.execute("DELETE FROM rd_logs WHERE id = ?", (log_id,))
             self.conn.commit()
+            
+            # Log mutation for mesh sync
+            self._log_mutation('rd_logs', 'DELETE', {'_record_id': log_id}, log_id)
+            
             return cursor.rowcount > 0
         except sqlite3.Error as e:
             print(f"Error deleting R&D log: {e}")
@@ -1752,6 +1833,16 @@ class CacheDatabase:
                 VALUES (?, ?, ?, ?, ?)
             """, (name, description, status, start_date, project_outcome or summary_findings))
             self.conn.commit()
+            
+            # Log mutation for mesh sync
+            self._log_mutation('projects', 'INSERT', {
+                'name': name,
+                'description': description,
+                'status': status,
+                'start_date': start_date,
+                'project_outcome': project_outcome or summary_findings
+            }, cursor.lastrowid)
+            
             return cursor.lastrowid
         except sqlite3.IntegrityError:
             print(f"[db] Project '{name}' already exists")
@@ -1858,6 +1949,10 @@ class CacheDatabase:
             cursor = self.conn.cursor()
             cursor.execute(query, values)
             self.conn.commit()
+            
+            # Log mutation for mesh sync
+            self._log_mutation('projects', 'UPDATE', kwargs, project_id)
+            
             return cursor.rowcount > 0
         except sqlite3.Error as e:
             print(f"Error updating project: {e}")
@@ -1880,6 +1975,10 @@ class CacheDatabase:
             # Delete the project
             cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
             self.conn.commit()
+            
+            # Log mutation for mesh sync
+            self._log_mutation('projects', 'DELETE', {'_record_id': project_id}, project_id)
+            
             return cursor.rowcount > 0
         except sqlite3.Error as e:
             print(f"Error deleting project: {e}")
