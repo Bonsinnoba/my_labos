@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "lab-rd-mobile",
+    "slug": "lab-rd-mobile",
+    "version": "1.0.0",
+    "sdkVersion": "49.0.0",
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "android": {
+      "package": "com.anonymous.labrdmobile"
+    }
+  }
+}
