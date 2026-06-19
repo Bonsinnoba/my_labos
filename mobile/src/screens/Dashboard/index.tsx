@@ -8,7 +8,7 @@ import StatusBadge from '../../components/common/StatusBadge';
 import ProjectCard from '../../components/lists/ProjectCard';
 import ExperimentCard from '../../components/lists/ExperimentCard';
 
-export default function DashboardScreen() {
+export default function DashboardScreen({ navigation }: any) {
   const theme = useTheme();
   const { isOnline, lastSync } = useAppStore();
 
@@ -89,7 +89,17 @@ export default function DashboardScreen() {
             <TouchableOpacity 
               key={action.id} 
               style={[styles.actionCard, { backgroundColor: theme.colors.surface }]}
-              onPress={() => console.log(`Action: ${action.title}`)}
+              onPress={() => {
+                if (action.title === 'New Experiment') {
+                  navigation.navigate('Experiments');
+                } else if (action.title === 'Add Note') {
+                  console.log('Add Note functionality');
+                } else if (action.title === 'Search') {
+                  console.log('Search functionality');
+                } else if (action.title === 'Sync Now') {
+                  console.log('Sync Now functionality');
+                }
+              }}
             >
               <View style={[styles.actionIcon, { backgroundColor: `${action.color}20` }]}>
                 <Ionicons name={action.icon as any} size={24} color={action.color} />
@@ -108,7 +118,7 @@ export default function DashboardScreen() {
           <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>
             Recent Projects
           </Text>
-          <TouchableOpacity>
+          <TouchableOpacity onPress={() => navigation.navigate('Projects')}>
             <Text style={[styles.seeAll, { color: theme.colors.primary }]}>
               See All
             </Text>
@@ -120,21 +130,21 @@ export default function DashboardScreen() {
             status="Active"
             progress={75}
             lastUpdated="2 hours ago"
-            onPress={() => console.log('Navigate to project')}
+            onPress={() => navigation.navigate('ProjectDetail', { projectId: 1 })}
           />
           <ProjectCard
             name="Sensor Calibration"
             status="Active"
             progress={45}
             lastUpdated="1 day ago"
-            onPress={() => console.log('Navigate to project')}
+            onPress={() => navigation.navigate('ProjectDetail', { projectId: 2 })}
           />
           <ProjectCard
             name="Power Supply Test"
             status="Paused"
             progress={30}
             lastUpdated="3 days ago"
-            onPress={() => console.log('Navigate to project')}
+            onPress={() => navigation.navigate('ProjectDetail', { projectId: 3 })}
           />
         </ScrollView>
       </View>
@@ -176,7 +186,7 @@ export default function DashboardScreen() {
           <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>
             Pending Experiments
           </Text>
-          <TouchableOpacity>
+          <TouchableOpacity onPress={() => navigation.navigate('Experiments')}>
             <Text style={[styles.seeAll, { color: theme.colors.primary }]}>
               See All
             </Text>
@@ -187,14 +197,14 @@ export default function DashboardScreen() {
           status="PENDING"
           projectName="Circuit Analysis"
           date="Today"
-          onPress={() => console.log('Navigate to experiment')}
+          onPress={() => navigation.navigate('ExperimentDetail', { experimentId: 1 })}
         />
         <ExperimentCard
           title="Temperature Calibration"
           status="PENDING"
           projectName="Sensor Calibration"
           date="Tomorrow"
-          onPress={() => console.log('Navigate to experiment')}
+          onPress={() => navigation.navigate('ExperimentDetail', { experimentId: 2 })}
         />
       </View>
 
@@ -242,11 +252,12 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     paddingHorizontal: 16,
     marginBottom: 24,
+    gap: 8,
   },
   statCard: {
-    width: '47%',
-    marginRight: '2%',
-    marginBottom: 8,
+    width: '48%',
+    marginHorizontal: 0,  // override Card component's built-in marginHorizontal: 16
+    marginBottom: 0,      // gap handles spacing instead
   },
   statContent: {
     alignItems: 'center',
@@ -289,11 +300,10 @@ const styles = StyleSheet.create({
   },
   actionsGrid: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    gap: 8,
   },
   actionCard: {
-    width: '23%',
-    marginRight: '2%',
+    flex: 1,
     marginBottom: 8,
     borderRadius: 12,
     padding: 12,

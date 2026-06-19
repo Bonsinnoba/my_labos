@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface AppState {
   isOnline: boolean;
@@ -22,6 +23,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'app-storage',
+      storage: createJSONStorage(() => AsyncStorage),
     }
   )
 );

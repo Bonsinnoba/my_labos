@@ -17,7 +17,9 @@
     "@react-navigation/bottom-tabs": "^6.5.11",
     "@react-navigation/native": "^6.1.9",
     "@react-navigation/stack": "^6.3.20",
+    "@types/crypto-js": "^4.2.2",
     "axios": "^1.6.2",
+    "crypto-js": "^4.2.0",
     "expo": "~49.0.0",
     "expo-status-bar": "~1.6.0",
     "react": "18.2.0",
@@ -36,9 +38,9 @@
     "@babel/core": "^7.20.0",
     "@types/react": "~18.2.45",
     "@types/react-native": "~0.72.8",
-    "typescript": "^5.3.3",
     "@typescript-eslint/eslint-plugin": "^6.15.0",
-    "@typescript-eslint/parser": "^6.15.0"
+    "@typescript-eslint/parser": "^6.15.0",
+    "typescript": "^5.3.3"
   },
   "private": true
 }

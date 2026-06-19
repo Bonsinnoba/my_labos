@@ -16,6 +16,8 @@ import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
 import sqlite3
+import zlib
+from io import BytesIO
 
 # Import secure vault for encryption
 from .secure_vault import SecureFileVault, InvalidKeyError, CorruptedPayloadError
@@ -23,17 +25,17 @@ from .secure_vault import SecureFileVault, InvalidKeyError, CorruptedPayloadErro
 # Configuration - Set these environment variables or update directly
 CLOUD_CONFIG = {
     # Dual-Account Backblaze B2 Configuration for 20GB Free Tier Maximization
-    # Account #1 - Light Storage Bucket (files < 50MB)
+    # Account #1 - Heavy Storage Bucket (files >= 50MB)
     "ACCOUNT_1_ENDPOINT": os.getenv("ACCOUNT_1_ENDPOINT", "https://s3.us-east-005.backblazeb2.com"),
     "ACCOUNT_1_KEY_ID": os.getenv("ACCOUNT_1_KEY_ID", ""),
     "ACCOUNT_1_APPLICATION_KEY": os.getenv("ACCOUNT_1_APPLICATION_KEY", ""),
-    "ACCOUNT_1_BUCKET": os.getenv("ACCOUNT_1_BUCKET", "lab-light-storage"),
+    "ACCOUNT_1_BUCKET": os.getenv("ACCOUNT_1_BUCKET", "lab-heavy-storage"),
     
-    # Account #2 - Heavy Storage Bucket (files >= 50MB)
+    # Account #2 - Light Storage Bucket (files < 50MB)
     "ACCOUNT_2_ENDPOINT": os.getenv("ACCOUNT_2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com"),
     "ACCOUNT_2_KEY_ID": os.getenv("ACCOUNT_2_KEY_ID", ""),
     "ACCOUNT_2_APPLICATION_KEY": os.getenv("ACCOUNT_2_APPLICATION_KEY", ""),
-    "ACCOUNT_2_BUCKET": os.getenv("ACCOUNT_2_BUCKET", "lab-heavy-storage"),
+    "ACCOUNT_2_BUCKET": os.getenv("ACCOUNT_2_BUCKET", "lab-light-storage"),
     
     # Sync Configuration
     "SYNC_INTERVAL_SECONDS": 300,  # Check for unsynced files every 5 minutes
@@ -65,8 +67,8 @@ class DualAccountSyncEngine:
     Dual-Account Backblaze B2 Synchronization Engine for 20GB Free Tier Maximization.
     
     Routes files to separate Backblaze accounts based on 50MB size threshold:
-    - Files < 50MB: Account #1 (Light Storage Bucket)
-    - Files >= 50MB: Account #2 (Heavy Storage Bucket)
+    - Files >= 50MB: Account #1 (Heavy Storage Bucket)
+    - Files < 50MB: Account #2 (Light Storage Bucket)
     
     All files are encrypted locally using AES-256-GCM before upload.
     """
@@ -93,13 +95,13 @@ class DualAccountSyncEngine:
             if self.config["ENCRYPTION_KEY"]:
                 try:
                     self.secure_vault = SecureFileVault(self.config["ENCRYPTION_KEY"])
-                    logger.info("SecureFileVault initialized - encryption enabled")
+                    logger.info("SecureFileVault initialized - encryption and compression enabled")
                 except InvalidKeyError as e:
                     logger.warning(f"Failed to initialize encryption vault: {e}")
-                    logger.warning("Encryption disabled - files will be uploaded unencrypted")
+                    logger.warning("Encryption disabled - files will be uploaded with compression only")
             else:
                 logger.warning("ENCRYPTION_KEY not provided - encryption disabled")
-                logger.warning("Files will be uploaded unencrypted")
+                logger.warning("Files will be uploaded with compression only")
         
         logger.info("DualAccountSyncEngine initialized")
         logger.info(f"Size threshold: {self.size_threshold_bytes / 1024 / 1024} MB")
@@ -213,26 +215,51 @@ class DualAccountSyncEngine:
             logger.error(f"Failed to get file size for {file_path}: {e}")
             return 0
     
-    def _should_use_account2(self, file_size: int) -> bool:
+    def _compress_file(self, file_path: str) -> Optional[BytesIO]:
         """
-        Determine if file should be uploaded to Account #2 based on size.
+        Compress a file using zlib.
+        
+        Args:
+            file_path: Path to the file to compress
+            
+        Returns:
+            BytesIO object containing compressed data, or None if compression fails
+        """
+        try:
+            with open(file_path, 'rb') as f:
+                original_data = f.read()
+            
+            compressed_data = zlib.compress(original_data, level=6)
+            compression_ratio = len(compressed_data) / len(original_data) if len(original_data) > 0 else 1
+            
+            logger.info(f"Compression: {len(original_data)} -> {len(compressed_data)} bytes (ratio: {compression_ratio:.2%})")
+            
+            return BytesIO(compressed_data)
+            
+        except Exception as e:
+            logger.error(f"Failed to compress file {file_path}: {e}")
+            return None
+    
+    def _should_use_account1(self, file_size: int) -> bool:
+        """
+        Determine if file should be uploaded to Account #1 based on size.
         
         Args:
             file_size: File size in bytes
             
         Returns:
-            True if file should go to Account #2 (>= 50MB), False for Account #1 (< 50MB)
+            True if file should go to Account #1 (>= 50MB), False for Account #2 (< 50MB)
         """
         if file_size >= self.size_threshold_bytes:
-            logger.info(f"Large file detected ({file_size / 1024 / 1024:.2f} MB >= 50 MB), routing to Account #2")
+            logger.info(f"Large file detected ({file_size / 1024 / 1024:.2f} MB >= 50 MB), routing to Account #1 (Heavy Storage)")
             return True
         else:
-            logger.info(f"Small file detected ({file_size / 1024 / 1024:.2f} MB < 50 MB), routing to Account #1")
+            logger.info(f"Small file detected ({file_size / 1024 / 1024:.2f} MB < 50 MB), routing to Account #2 (Light Storage)")
             return False
     
     def _upload_to_account1(self, file_path: str, file_name: str) -> Optional[str]:
         """
-        Upload file to Account #1 (Light Storage Bucket) with optional encryption.
+        Upload file to Account #1 (Heavy Storage Bucket) with optional encryption.
         
         Args:
             file_path: Local path to the file
@@ -248,28 +275,39 @@ class DualAccountSyncEngine:
         try:
             bucket_name = self.config["ACCOUNT_1_BUCKET"]
             
-            logger.info(f"Uploading {file_name} to Account #1 (Light Storage)")
+            logger.info(f"Uploading {file_name} to Account #1 (Heavy Storage)")
             
             # Encrypt file if encryption is enabled
             if self.secure_vault:
-                logger.info("Encrypting file before upload")
+                logger.info("Encrypting and compressing file before upload")
                 encrypted_content = self.secure_vault.encrypt_file(file_path)
                 file_name = f"{file_name}.enc"
                 
                 # Upload encrypted content using BytesIO
-                from io import BytesIO
                 self.account1_client.upload_fileobj(
                     BytesIO(encrypted_content),
                     Bucket=bucket_name,
                     Key=file_name
                 )
             else:
-                # Upload original file
-                self.account1_client.upload_file(
-                    Filename=file_path,
-                    Bucket=bucket_name,
-                    Key=file_name
-                )
+                # Compress file even without encryption
+                logger.info("Compressing file before upload (encryption disabled)")
+                compressed_content = self._compress_file(file_path)
+                if compressed_content:
+                    file_name = f"{file_name}.gz"
+                    self.account1_client.upload_fileobj(
+                        compressed_content,
+                        Bucket=bucket_name,
+                        Key=file_name
+                    )
+                else:
+                    # Upload original file if compression fails
+                    logger.warning("Compression failed, uploading original file")
+                    self.account1_client.upload_file(
+                        Filename=file_path,
+                        Bucket=bucket_name,
+                        Key=file_name
+                    )
             
             # Construct public URL
             public_url = f"{self.config['ACCOUNT_1_ENDPOINT']}/{bucket_name}/{file_name}"
@@ -283,7 +321,7 @@ class DualAccountSyncEngine:
     
     def _upload_to_account2(self, file_path: str, file_name: str) -> Optional[str]:
         """
-        Upload file to Account #2 (Heavy Storage Bucket) with optional encryption.
+        Upload file to Account #2 (Light Storage Bucket) with optional encryption.
         
         Args:
             file_path: Local path to the file
@@ -299,28 +337,39 @@ class DualAccountSyncEngine:
         try:
             bucket_name = self.config["ACCOUNT_2_BUCKET"]
             
-            logger.info(f"Uploading {file_name} to Account #2 (Heavy Storage)")
+            logger.info(f"Uploading {file_name} to Account #2 (Light Storage)")
             
             # Encrypt file if encryption is enabled
             if self.secure_vault:
-                logger.info("Encrypting file before upload")
+                logger.info("Encrypting and compressing file before upload")
                 encrypted_content = self.secure_vault.encrypt_file(file_path)
                 file_name = f"{file_name}.enc"
                 
                 # Upload encrypted content using BytesIO
-                from io import BytesIO
                 self.account2_client.upload_fileobj(
                     BytesIO(encrypted_content),
                     Bucket=bucket_name,
                     Key=file_name
                 )
             else:
-                # Upload original file
-                self.account2_client.upload_file(
-                    Filename=file_path,
-                    Bucket=bucket_name,
-                    Key=file_name
-                )
+                # Compress file even without encryption
+                logger.info("Compressing file before upload (encryption disabled)")
+                compressed_content = self._compress_file(file_path)
+                if compressed_content:
+                    file_name = f"{file_name}.gz"
+                    self.account2_client.upload_fileobj(
+                        compressed_content,
+                        Bucket=bucket_name,
+                        Key=file_name
+                    )
+                else:
+                    # Upload original file if compression fails
+                    logger.warning("Compression failed, uploading original file")
+                    self.account2_client.upload_file(
+                        Filename=file_path,
+                        Bucket=bucket_name,
+                        Key=file_name
+                    )
             
             # Construct public URL
             public_url = f"{self.config['ACCOUNT_2_ENDPOINT']}/{bucket_name}/{file_name}"
@@ -446,17 +495,17 @@ class DualAccountSyncEngine:
         """
         # Determine target account based on file size
         if file_size is not None and file_size >= self.size_threshold_bytes:
-            # File belongs to Account #2 (Heavy Storage)
-            target_client = self.account2_client
-            target_bucket = self.config["ACCOUNT_2_BUCKET"]
-            account_name = "Account #2"
-            logger.info(f"Large file ({file_size / 1024 / 1024:.2f} MB), targeting Account #2")
-        else:
-            # File belongs to Account #1 (Light Storage)
+            # File belongs to Account #1 (Heavy Storage)
             target_client = self.account1_client
             target_bucket = self.config["ACCOUNT_1_BUCKET"]
             account_name = "Account #1"
-            logger.info(f"Small file ({file_size / 1024 / 1024:.2f} MB if known), targeting Account #1")
+            logger.info(f"Large file ({file_size / 1024 / 1024:.2f} MB), targeting Account #1 (Heavy Storage)")
+        else:
+            # File belongs to Account #2 (Light Storage)
+            target_client = self.account2_client
+            target_bucket = self.config["ACCOUNT_2_BUCKET"]
+            account_name = "Account #2"
+            logger.info(f"Small file ({file_size / 1024 / 1024:.2f} MB if known), targeting Account #2 (Light Storage)")
         
         if not target_client:
             logger.error(f"{account_name} client not initialized - cannot delete {file_name}")
@@ -589,16 +638,16 @@ class DualAccountSyncEngine:
                     file_size = self._get_file_size(file_path)
                 
                 # Determine routing destination based on 50MB threshold
-                use_account2 = self._should_use_account2(file_size)
+                use_account1 = self._should_use_account1(file_size)
                 
                 # Get file name
                 file_name = Path(file_path).name
                 
                 # Upload to appropriate account
-                if use_account2:
-                    cloud_url = self._upload_to_account2(file_path, file_name)
-                else:
+                if use_account1:
                     cloud_url = self._upload_to_account1(file_path, file_name)
+                else:
+                    cloud_url = self._upload_to_account2(file_path, file_name)
                 
                 if cloud_url:
                     # Update database record

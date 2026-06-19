@@ -1,21 +1,72 @@
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosResponse } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { cloudClient } from '../cloud/cloudClient';
 
-const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8000';
+const DEFAULT_API_BASE_URL = process.env.EXPO_PUBLIC_CLOUD_API_URL || process.env.CLOUD_API_URL || 'http://192.168.100.5:8000';
 
 class ApiClient {
   private client: AxiosInstance;
+  private baseURL: string;
+  private cloudMode: boolean = true;
 
   constructor() {
+    const envApiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || process.env.API_BASE_URL;
+    this.baseURL = envApiUrl || DEFAULT_API_BASE_URL;
     this.client = axios.create({
-      baseURL: API_BASE_URL,
-      timeout: 30000,
+      baseURL: this.baseURL,
+      timeout: Number(process.env.EXPO_PUBLIC_API_TIMEOUT || process.env.API_TIMEOUT || 30000),
       headers: {
         'Content-Type': 'application/json',
       },
     });
 
     this.setupInterceptors();
+    this.loadApiUrl();
+    this.loadCloudMode();
+  }
+
+  private async loadApiUrl() {
+    try {
+      const envApiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || process.env.API_BASE_URL;
+      if (envApiUrl) {
+        this.baseURL = envApiUrl;
+        this.client.defaults.baseURL = envApiUrl;
+        console.log(`[ApiClient] Enforcing API base URL from env: ${envApiUrl}`);
+        return;
+      }
+
+      const savedApiUrl = await AsyncStorage.getItem('@api_base_url');
+      if (savedApiUrl) {
+        this.baseURL = savedApiUrl;
+        this.client.defaults.baseURL = savedApiUrl;
+      }
+    } catch (error) {
+      console.error('Error loading API URL:', error);
+    }
+  }
+
+  private async loadCloudMode() {
+    this.cloudMode = true; // Always enable cloud mode
+    console.log(`[ApiClient] Cloud mode enforced: ${this.cloudMode}`);
+  }
+
+  public async updateBaseURL(newUrl: string) {
+    this.baseURL = newUrl;
+    this.client.defaults.baseURL = newUrl;
+    await AsyncStorage.setItem('@api_base_url', newUrl);
+  }
+
+  public async setCloudMode(enabled: boolean) {
+    this.cloudMode = true; // Always enable cloud mode
+    console.log(`[ApiClient] setCloudMode call ignored - cloud mode is enforced`);
+  }
+
+  public isCloudMode(): boolean {
+    return true; // Enforced for direct cloud-only operation
+  }
+
+  public async getCloudClient() {
+    return cloudClient;
   }
 
   private setupInterceptors() {

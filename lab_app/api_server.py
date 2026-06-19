@@ -26,6 +26,9 @@ load_dotenv()
 sys.path.insert(0, str(Path(__file__).parent))
 
 from database.cache_db import CacheDatabase
+from database.cloud_sync_engine import DualAccountSyncEngine
+from database.mesh_sync_coordinator import MeshSyncCoordinator
+from database.mobile_cloud_api import MobileCloudAPI, create_mobile_cloud_api
 from analysis.data_processor import DataProcessor
 from voice.listener import VoiceListener
 from dashboard.lab_dashboard import LabDashboard
@@ -74,6 +77,50 @@ equipment_manager = EquipmentManager(db=db)
 findings_manager = FindingsManager(db=db)
 toolbox = EngineeringToolbox(db=db)
 semantic_search = SemanticSearch(db=db)
+
+# Initialize cloud sync engine
+cloud_sync_engine: Optional[DualAccountSyncEngine] = None
+try:
+    cloud_sync_engine = DualAccountSyncEngine()
+    # Start background sync if credentials are configured
+    if cloud_sync_engine.initialize_cloud_clients():
+        cloud_sync_engine.start_background_sync()
+        print("[sync] Cloud sync engine initialized and background sync started")
+    else:
+        print("[sync] Cloud sync engine initialized but no credentials configured - sync disabled")
+except Exception as e:
+    print(f"[sync] Failed to initialize cloud sync engine: {e}")
+    cloud_sync_engine = None
+
+# Initialize mesh sync coordinator for peer-to-peer lab computer sync
+mesh_coordinator: Optional[MeshSyncCoordinator] = None
+try:
+    # Use the same B2 bucket for mesh transactions (use account 2 for smaller transaction files)
+    mesh_coordinator = MeshSyncCoordinator(
+        db_path=os.getenv("DATABASE_PATH", "local_cache.db"),
+        b2_bucket_name=os.getenv("MESH_SYNC_BUCKET", "lab-mesh-sync"),
+        b2_endpoint_url=os.getenv("ACCOUNT_2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com"),
+        b2_access_key_id=os.getenv("ACCOUNT_2_KEY_ID", ""),
+        b2_secret_access_key=os.getenv("ACCOUNT_2_APPLICATION_KEY", "")
+    )
+    # Start mesh sync loop
+    mesh_coordinator.start_sync_loop()
+    print("[mesh] Mesh sync coordinator initialized and sync loop started")
+except Exception as e:
+    print(f"[mesh] Failed to initialize mesh sync coordinator: {e}")
+    mesh_coordinator = None
+
+# Initialize mobile cloud API for direct cloud access
+mobile_cloud_api: Optional[MobileCloudAPI] = None
+try:
+    mobile_cloud_api = create_mobile_cloud_api()
+    if mobile_cloud_api and mobile_cloud_api.is_available():
+        print("[mobile_cloud] Mobile cloud API initialized - mobile devices can fetch data directly from cloud")
+    else:
+        print("[mobile_cloud] Mobile cloud API not available - mobile devices will use local API")
+except Exception as e:
+    print(f"[mobile_cloud] Failed to initialize mobile cloud API: {e}")
+    mobile_cloud_api = None
 
 # Initialize Gemini Assistant (will be lazy-loaded to avoid startup errors if API key not set)
 gemini_assistant: Optional[GeminiLabAssistant] = None if not GEMINI_AVAILABLE else None
@@ -330,8 +377,197 @@ async def health_check():
     return {
         "status": "healthy",
         "database": "connected" if db.conn else "disconnected",
-        "voice": "active" if voice_listener and voice_listener.is_active() else "inactive"
+        "voice": "active" if voice_listener and voice_listener.is_active() else "inactive",
+        "cloud_sync": "active" if cloud_sync_engine else "disabled",
+        "mesh_sync": "active" if mesh_coordinator and mesh_coordinator.sync_running else "disabled"
     }
+
+
+# --- Cloud Sync API ---
+
+@app.get("/api/sync/status")
+async def get_sync_status():
+    """Get cloud sync status."""
+    if not cloud_sync_engine:
+        return {
+            "status": "disabled",
+            "message": "Cloud sync engine not initialized - check Backblaze B2 credentials"
+        }
+    
+    return {
+        "status": "active" if cloud_sync_engine.running else "inactive",
+        "account1_configured": bool(cloud_sync_engine.config.get("ACCOUNT_1_KEY_ID")),
+        "account2_configured": bool(cloud_sync_engine.config.get("ACCOUNT_2_KEY_ID")),
+        "encryption_enabled": cloud_sync_engine.secure_vault is not None
+    }
+
+
+@app.post("/api/sync/trigger")
+async def trigger_sync():
+    """Manually trigger a sync cycle."""
+    if not cloud_sync_engine:
+        raise HTTPException(status_code=503, detail="Cloud sync engine not initialized")
+    
+    try:
+        cloud_sync_engine.sync_once()
+        return {"success": True, "message": "Sync cycle triggered"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Mesh Sync API for Lab Computer Peer-to-Peer Sync ---
+
+@app.get("/api/mesh/status")
+async def get_mesh_status():
+    """Get mesh sync coordinator status."""
+    if not mesh_coordinator:
+        return {
+            "status": "disabled",
+            "message": "Mesh sync coordinator not initialized - check B2 credentials"
+        }
+    
+    return {
+        "status": "active" if mesh_coordinator.sync_running else "inactive",
+        "device_id": mesh_coordinator.device_id,
+        "is_online": mesh_coordinator.is_online,
+        "b2_bucket": mesh_coordinator.b2_bucket_name,
+        "registered_devices": list(mesh_coordinator.registered_devices)
+    }
+
+
+@app.post("/api/mesh/trigger")
+async def trigger_mesh_sync():
+    """Manually trigger a mesh sync cycle (pull from cloud, then push to cloud)."""
+    if not mesh_coordinator:
+        raise HTTPException(status_code=503, detail="Mesh sync coordinator not initialized")
+    
+    try:
+        # Pull from cloud first
+        pulled_count = mesh_coordinator.pull_from_cloud()
+        # Then push to cloud
+        push_success = mesh_coordinator.push_to_cloud()
+        
+        return {
+            "success": True,
+            "message": f"Mesh sync completed: pulled {pulled_count} transactions, push {'successful' if push_success else 'failed'}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/mesh/transactions")
+async def get_mesh_transactions(since_timestamp: Optional[int] = None):
+    """Get pending mesh transactions from local ledger."""
+    if not mesh_coordinator:
+        raise HTTPException(status_code=503, detail="Mesh sync coordinator not initialized")
+    
+    try:
+        transactions = mesh_coordinator.get_pending_transactions(since_timestamp)
+        return {"transactions": transactions, "count": len(transactions)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/mesh/register-device")
+async def register_mesh_device(device_id: str):
+    """Register a device ID for mesh sync garbage collection tracking."""
+    if not mesh_coordinator:
+        raise HTTPException(status_code=503, detail="Mesh sync coordinator not initialized")
+    
+    try:
+        mesh_coordinator.register_device(device_id)
+        return {"success": True, "message": f"Device {device_id} registered"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Mobile Cloud API for Direct Cloud Access ---
+
+@app.get("/api/mobile/cloud-status")
+async def get_mobile_cloud_status():
+    """Get mobile cloud API status."""
+    if not mobile_cloud_api:
+        return {
+            "status": "disabled",
+            "message": "Mobile cloud API not initialized - check B2 credentials"
+        }
+    
+    return {
+        "status": "active" if mobile_cloud_api.is_available() else "disabled",
+        "b2_bucket": mobile_cloud_api.b2_bucket_name,
+        "endpoint": mobile_cloud_api.b2_endpoint_url
+    }
+
+
+@app.get("/api/mobile/transactions")
+async def get_mobile_transactions(since_timestamp: Optional[int] = None):
+    """Get mesh transactions from cloud for mobile devices."""
+    if not mobile_cloud_api or not mobile_cloud_api.is_available():
+        raise HTTPException(status_code=503, detail="Mobile cloud API not available")
+    
+    try:
+        transactions = mobile_cloud_api.get_mesh_transactions(since_timestamp)
+        return {"transactions": transactions, "count": len(transactions)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/mobile/db-snapshot")
+async def get_mobile_db_snapshot():
+    """Get the latest database snapshot from cloud for mobile devices."""
+    if not mobile_cloud_api or not mobile_cloud_api.is_available():
+        raise HTTPException(status_code=503, detail="Mobile cloud API not available")
+    
+    try:
+        snapshot = mobile_cloud_api.get_latest_db_snapshot()
+        if not snapshot:
+            raise HTTPException(status_code=404, detail="No database snapshot found")
+        
+        return {
+            "snapshot_key": snapshot['snapshot_key'],
+            "last_modified": snapshot['last_modified'],
+            "size": snapshot['size']
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/mobile/file-url")
+async def get_mobile_file_url(file_name: str, file_size: int):
+    """Get the public URL for a file stored in cloud."""
+    if not mobile_cloud_api or not mobile_cloud_api.is_available():
+        raise HTTPException(status_code=503, detail="Mobile cloud API not available")
+    
+    try:
+        url = mobile_cloud_api.get_file_url(file_name, file_size)
+        if not url:
+            raise HTTPException(status_code=404, detail="File URL not found")
+        
+        return {"url": url}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/mobile/push-transaction")
+async def push_mobile_transaction(transaction: Dict[str, Any]):
+    """Push a transaction from mobile device to cloud (for mobile-to-lab sync)."""
+    if not mobile_cloud_api or not mobile_cloud_api.is_available():
+        raise HTTPException(status_code=503, detail="Mobile cloud API not available")
+    
+    try:
+        success = mobile_cloud_api.push_mobile_transaction(transaction)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to push transaction")
+        
+        return {"success": True, "message": "Transaction pushed to cloud"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- Root and UI serving ---
@@ -472,6 +708,162 @@ async def view_document(doc_id: int):
         print(f"Error viewing document: {e}")
         import traceback
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Mobile Resources API (maps to documents for compatibility) ---
+
+@app.get("/api/resources")
+async def get_resources(project_id: Optional[int] = None):
+    """Get all resources (maps to documents for mobile compatibility)."""
+    try:
+        if project_id:
+            docs = db.get_documents(project_id=project_id)
+        else:
+            docs = db.get_all_documents()
+        
+        # Transform documents to resource format
+        resources = []
+        for doc in docs:
+            resources.append({
+                'id': doc['id'],
+                'title': doc.get('title', ''),
+                'type': doc.get('file_type', 'OTHER'),
+                'size': doc.get('file_size'),
+                'file_path': doc.get('file_path'),
+                'cloud_file_url': doc.get('cloud_file_url'),
+                'date': doc.get('upload_date'),
+                'uploaded_by': doc.get('uploaded_by'),
+                'project_id': doc.get('project_id'),
+                'tags': doc.get('tags', []),
+                'created_at': doc.get('created_at'),
+                'updated_at': doc.get('updated_at')
+            })
+        
+        return resources
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/projects/{project_id}/resources")
+async def get_project_resources(project_id: int):
+    """Get resources for a specific project (maps to documents for mobile compatibility)."""
+    try:
+        docs = db.get_documents(project_id=project_id)
+        
+        # Transform documents to resource format
+        resources = []
+        for doc in docs:
+            resources.append({
+                'id': doc['id'],
+                'title': doc.get('title', ''),
+                'type': doc.get('file_type', 'OTHER'),
+                'size': doc.get('file_size'),
+                'file_path': doc.get('file_path'),
+                'cloud_file_url': doc.get('cloud_file_url'),
+                'date': doc.get('upload_date'),
+                'uploaded_by': doc.get('uploaded_by'),
+                'project_id': project_id,
+                'tags': doc.get('tags', []),
+                'created_at': doc.get('created_at'),
+                'updated_at': doc.get('updated_at')
+            })
+        
+        return resources
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/resources/{resource_id}")
+async def get_resource(resource_id: int):
+    """Get resource by ID (maps to document for mobile compatibility)."""
+    try:
+        doc = db.get_document(resource_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Resource not found")
+        
+        return {
+            'id': doc['id'],
+            'title': doc.get('title', ''),
+            'type': doc.get('file_type', 'OTHER'),
+            'size': doc.get('file_size'),
+            'file_path': doc.get('file_path'),
+            'cloud_file_url': doc.get('cloud_file_url'),
+            'date': doc.get('upload_date'),
+            'uploaded_by': doc.get('uploaded_by'),
+            'project_id': doc.get('project_id'),
+            'tags': doc.get('tags', []),
+            'created_at': doc.get('created_at'),
+            'updated_at': doc.get('updated_at')
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/resources")
+async def create_resource(data: Dict[str, Any]):
+    """Create new resource (maps to document for mobile compatibility)."""
+    try:
+        doc_id = db.add_document(
+            title=data.get('title', ''),
+            file_type=data.get('type', 'OTHER'),
+            file_path=data.get('file_path'),
+            cloud_file_url=data.get('cloud_file_url'),
+            project_id=data.get('project_id'),
+            tags=data.get('tags', [])
+        )
+        return {
+            'id': doc_id,
+            'title': data.get('title', ''),
+            'type': data.get('type', 'OTHER')
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/resources/{resource_id}")
+async def update_resource(resource_id: int, data: Dict[str, Any]):
+    """Update resource (maps to document for mobile compatibility)."""
+    try:
+        # Map resource fields to document fields
+        doc_data = {}
+        if 'title' in data:
+            doc_data['title'] = data['title']
+        if 'type' in data:
+            doc_data['file_type'] = data['type']
+        if 'file_path' in data:
+            doc_data['file_path'] = data['file_path']
+        if 'cloud_file_url' in data:
+            doc_data['cloud_file_url'] = data['cloud_file_url']
+        if 'project_id' in data:
+            doc_data['project_id'] = data['project_id']
+        if 'tags' in data:
+            doc_data['tags'] = data['tags']
+        
+        success = db.update_document(resource_id, **doc_data)
+        if not success:
+            raise HTTPException(status_code=404, detail="Resource not found")
+        
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/resources/{resource_id}")
+async def delete_resource(resource_id: int):
+    """Delete resource (maps to document for mobile compatibility)."""
+    try:
+        success = db.delete_document(resource_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Resource not found")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1079,6 +1471,157 @@ async def get_experiment_usage_summary(experiment_id: int):
     try:
         summary = db.get_experiment_usage_summary(experiment_id)
         return {"success": True, "data": summary}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Mobile Experiments API (maps to logs for compatibility) ---
+
+@app.get("/api/experiments")
+async def get_experiments(project_id: Optional[int] = None):
+    """Get all experiments (maps to R&D logs for mobile compatibility)."""
+    try:
+        if project_id:
+            logs = db.get_all_rd_logs(project_id=project_id)
+        else:
+            logs = db.get_all_rd_logs(limit=100)
+        
+        # Transform logs to experiment format
+        experiments = []
+        for log in logs:
+            experiments.append({
+                'id': log['id'],
+                'title': log.get('log_title', ''),
+                'status': log.get('status', 'PENDING'),
+                'project_id': log.get('project_id'),
+                'project_name': log.get('project_name', ''),
+                'date': log.get('date'),
+                'expected_outcome': log.get('expected_outcome'),
+                'actual_outcome': log.get('actual_outcome'),
+                'findings': log.get('log_text', ''),
+                'created_at': log.get('created_at'),
+                'updated_at': log.get('updated_at')
+            })
+        
+        return experiments
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/experiments/{experiment_id}")
+async def get_experiment(experiment_id: int):
+    """Get experiment by ID (maps to R&D log for mobile compatibility)."""
+    try:
+        log = db.get_rd_log(experiment_id)
+        if not log:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+        
+        return {
+            'id': log['id'],
+            'title': log.get('log_title', ''),
+            'status': log.get('status', 'PENDING'),
+            'project_id': log.get('project_id'),
+            'project_name': log.get('project_name', ''),
+            'date': log.get('date'),
+            'expected_outcome': log.get('expected_outcome'),
+            'actual_outcome': log.get('actual_outcome'),
+            'findings': log.get('log_text', ''),
+            'created_at': log.get('created_at'),
+            'updated_at': log.get('updated_at')
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/experiments")
+async def create_experiment(data: Dict[str, Any]):
+    """Create new experiment (maps to R&D log for mobile compatibility)."""
+    try:
+        log_id = db.add_rd_log(
+            project_name=data.get('project_name', ''),
+            log_title=data.get('title', ''),
+            log_text=data.get('findings', ''),
+            status=data.get('status', 'PENDING'),
+            expected_outcome=data.get('expected_outcome'),
+            actual_outcome=data.get('actual_outcome')
+        )
+        return {
+            'id': log_id,
+            'title': data.get('title', ''),
+            'status': data.get('status', 'PENDING')
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/experiments/{experiment_id}")
+async def update_experiment(experiment_id: int, data: Dict[str, Any]):
+    """Update experiment (maps to R&D log for mobile compatibility)."""
+    try:
+        # Map experiment fields to log fields
+        log_data = {}
+        if 'title' in data:
+            log_data['log_title'] = data['title']
+        if 'findings' in data:
+            log_data['log_text'] = data['findings']
+        if 'status' in data:
+            log_data['status'] = data['status']
+        if 'expected_outcome' in data:
+            log_data['expected_outcome'] = data['expected_outcome']
+        if 'actual_outcome' in data:
+            log_data['actual_outcome'] = data['actual_outcome']
+        
+        success = db.update_rd_log(experiment_id, **log_data)
+        if not success:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+        
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/experiments/{experiment_id}")
+async def delete_experiment(experiment_id: int):
+    """Delete experiment (maps to R&D log for mobile compatibility)."""
+    try:
+        success = db.delete_rd_log(experiment_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/projects/{project_id}/experiments")
+async def get_project_experiments(project_id: int):
+    """Get experiments for a specific project (maps to R&D logs for mobile compatibility)."""
+    try:
+        logs = db.get_all_rd_logs(project_id=project_id)
+        
+        # Transform logs to experiment format
+        experiments = []
+        for log in logs:
+            experiments.append({
+                'id': log['id'],
+                'title': log.get('log_title', ''),
+                'status': log.get('status', 'PENDING'),
+                'project_id': project_id,
+                'project_name': log.get('project_name', ''),
+                'date': log.get('date'),
+                'expected_outcome': log.get('expected_outcome'),
+                'actual_outcome': log.get('actual_outcome'),
+                'findings': log.get('log_text', ''),
+                'created_at': log.get('created_at'),
+                'updated_at': log.get('updated_at')
+            })
+        
+        return experiments
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2526,6 +3069,459 @@ async def cleanup_old_activities(hours: int = 24):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# --- Mobile Sync API ---
+
+@app.post("/api/sync/transactions")
+async def sync_transactions(data: Dict[str, Any]):
+    """Receive sync transactions from mobile devices."""
+    try:
+        transactions = data.get('transactions', [])
+        device_id = data.get('device_id')
+        
+        # Process each transaction
+        for tx in transactions:
+            table_name = tx.get('table_name')
+            operation = tx.get('operation')
+            payload = tx.get('payload')
+            
+            if operation == 'INSERT':
+                if table_name == 'projects':
+                    db.add_project(**payload)
+                elif table_name == 'experiments':
+                    # Map to logs
+                    db.add_rd_log(
+                        project_name=payload.get('project_name', ''),
+                        log_title=payload.get('title', ''),
+                        log_text=payload.get('findings', ''),
+                        status=payload.get('status', 'Active')
+                    )
+                elif table_name == 'findings':
+                    db.add_finding(**payload)
+            elif operation == 'UPDATE':
+                record_id = payload.get('_record_id') or payload.get('id')
+                if record_id:
+                    if table_name == 'projects':
+                        db.update_project(record_id, **payload)
+                    elif table_name == 'experiments':
+                        db.update_rd_log(record_id, **payload)
+                    elif table_name == 'findings':
+                        db.update_finding(record_id, **payload)
+            elif operation == 'DELETE':
+                record_id = payload.get('_record_id') or payload.get('id')
+                if record_id:
+                    if table_name == 'projects':
+                        db.delete_project(record_id)
+                    elif table_name == 'experiments':
+                        db.delete_rd_log(record_id)
+                    elif table_name == 'findings':
+                        db.delete_finding(record_id)
+        
+        return {"success": True, "processed": len(transactions)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/sync/updates")
+async def get_sync_updates(since: Optional[str] = None):
+    """Get updates since last sync for mobile devices."""
+    try:
+        updates = []
+        
+        # Get recent projects
+        projects = db.get_all_projects()
+        for project in projects:
+            if since and project.get('updated_at') and project['updated_at'] < since:
+                continue
+            updates.append({
+                'table_name': 'projects',
+                'operation': 'UPDATE',
+                'payload': project,
+                'timestamp': project.get('updated_at') or project.get('created_at')
+            })
+        
+        # Get recent logs (experiments)
+        logs = db.get_all_rd_logs(limit=100)
+        for log in logs:
+            if since and log.get('updated_at') and log['updated_at'] < since:
+                continue
+            updates.append({
+                'table_name': 'experiments',
+                'operation': 'UPDATE',
+                'payload': log,
+                'timestamp': log.get('updated_at') or log.get('created_at')
+            })
+        
+        # Get recent findings
+        findings = findings_manager.get_all_findings()
+        for finding in findings:
+            if since and finding.get('updated_at') and finding['updated_at'] < since:
+                continue
+            updates.append({
+                'table_name': 'findings',
+                'operation': 'UPDATE',
+                'payload': finding,
+                'timestamp': finding.get('updated_at') or finding.get('created_at')
+            })
+        
+        return {"success": True, "updates": updates}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Mobile Toolbox/Calculator API ---
+
+@app.post("/api/tools/ohms-law")
+async def calculate_ohms_law(data: Dict[str, Any]):
+    """Calculate Ohm's Law (V = I * R)."""
+    try:
+        result = toolbox.ohms_law(
+            voltage=data.get('voltage'),
+            current=data.get('current'),
+            resistance=data.get('resistance')
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/voltage-divider")
+async def calculate_voltage_divider(data: Dict[str, Any]):
+    """Calculate voltage divider output."""
+    try:
+        result = toolbox.voltage_divider(
+            vin=data['vin'],
+            r1=data['r1'],
+            r2=data['r2']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/power")
+async def calculate_power(data: Dict[str, Any]):
+    """Calculate power (P = V * I = V² / R = I² * R)."""
+    try:
+        result = toolbox.power_calculator(
+            voltage=data['voltage'],
+            current=data.get('current'),
+            resistance=data.get('resistance')
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/led-resistor")
+async def calculate_led_resistor(data: Dict[str, Any]):
+    """Calculate LED resistor value."""
+    try:
+        result = toolbox.led_resistor(
+            vs=data['vs'],
+            vf=data['vf'],
+            if_current=data['if_current']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/battery-runtime")
+async def calculate_battery_runtime(data: Dict[str, Any]):
+    """Calculate battery runtime."""
+    try:
+        result = toolbox.battery_runtime(
+            capacity_mah=data['capacity_mah'],
+            current_ma=data['current_ma']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/rc-time-constant")
+async def calculate_rc_time_constant(data: Dict[str, Any]):
+    """Calculate RC time constant (τ = R * C)."""
+    try:
+        result = toolbox.rc_time_constant(
+            resistance=data['resistance'],
+            capacitance=data['capacitance']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/lc-resonant-frequency")
+async def calculate_lc_resonant_frequency(data: Dict[str, Any]):
+    """Calculate LC resonant frequency (f = 1 / (2π * √(LC)))."""
+    try:
+        result = toolbox.lc_resonant_frequency(
+            inductance=data['inductance'],
+            capacitance=data['capacitance']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/scientific-calculator")
+async def calculate_scientific(data: Dict[str, Any]):
+    """Evaluate a mathematical expression."""
+    try:
+        result = toolbox.scientific_calculator(expression=data['expression'])
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/statistics")
+async def calculate_statistics(data: Dict[str, Any]):
+    """Calculate basic statistics for a dataset."""
+    try:
+        result = toolbox.statistics(data=data['data'])
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/matrix-multiply")
+async def calculate_matrix_multiply(data: Dict[str, Any]):
+    """Multiply two matrices."""
+    try:
+        result = toolbox.matrix_multiply(
+            matrix_a=data['matrix_a'],
+            matrix_b=data['matrix_b']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/capacitor-energy")
+async def calculate_capacitor_energy(data: Dict[str, Any]):
+    """Calculate energy stored in a capacitor (E = 0.5 * C * V²)."""
+    try:
+        result = toolbox.capacitor_energy(
+            capacitance=data['capacitance'],
+            voltage=data['voltage']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/inductor-energy")
+async def calculate_inductor_energy(data: Dict[str, Any]):
+    """Calculate energy stored in an inductor (E = 0.5 * L * I²)."""
+    try:
+        result = toolbox.inductor_energy(
+            inductance=data['inductance'],
+            current=data['current']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/rlc-impedance")
+async def calculate_rlc_impedance(data: Dict[str, Any]):
+    """Calculate RLC circuit impedance."""
+    try:
+        result = toolbox.rlc_impedance(
+            resistance=data['resistance'],
+            inductance=data['inductance'],
+            capacitance=data['capacitance'],
+            frequency=data['frequency']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/pwm-duty-cycle")
+async def calculate_pwm_duty_cycle(data: Dict[str, Any]):
+    """Calculate PWM duty cycle."""
+    try:
+        result = toolbox.pwm_duty_cycle(
+            on_time=data['on_time'],
+            period=data['period']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/gear-ratio")
+async def calculate_gear_ratio(data: Dict[str, Any]):
+    """Calculate gear ratio."""
+    try:
+        result = toolbox.gear_ratio(
+            teeth_driver=data['teeth_driver'],
+            teeth_driven=data['teeth_driven']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/torque")
+async def calculate_torque(data: Dict[str, Any]):
+    """Calculate torque (τ = r * F * sin(θ))."""
+    try:
+        result = toolbox.torque(
+            force=data['force'],
+            radius=data['radius'],
+            angle=data.get('angle', 90)
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/thermal-resistance")
+async def calculate_thermal_resistance(data: Dict[str, Any]):
+    """Calculate thermal resistance (Rθ = ΔT / P)."""
+    try:
+        result = toolbox.thermal_resistance(
+            temperature_rise=data['temperature_rise'],
+            power=data['power']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/heat-dissipation")
+async def calculate_heat_dissipation(data: Dict[str, Any]):
+    """Calculate temperature rise from heat dissipation (ΔT = Rθ * P)."""
+    try:
+        result = toolbox.heat_dissipation(
+            thermal_resistance=data['thermal_resistance'],
+            power=data['power']
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/decibel")
+async def calculate_decibel(data: Dict[str, Any]):
+    """Calculate decibels from power ratio."""
+    try:
+        result = toolbox.decibel(
+            power_ratio=data['power_ratio'],
+            reference=data.get('reference')
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/frequency-to-wavelength")
+async def calculate_frequency_to_wavelength(data: Dict[str, Any]):
+    """Calculate wavelength from frequency (λ = c / f)."""
+    try:
+        result = toolbox.frequency_to_wavelength(
+            frequency=data['frequency'],
+            speed_of_light=data.get('speed_of_light', 299792458)
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/baud-rate")
+async def calculate_baud_rate(data: Dict[str, Any]):
+    """Calculate baud rate from bit rate."""
+    try:
+        result = toolbox.baud_rate(
+            bit_rate=data['bit_rate'],
+            bits_per_symbol=data.get('bits_per_symbol', 8)
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tools/wire-resistance")
+async def calculate_wire_resistance(data: Dict[str, Any]):
+    """Calculate wire resistance."""
+    try:
+        result = toolbox.wire_resistance(
+            awg=data['awg'],
+            length=data['length'],
+            temperature=data.get('temperature', 20),
+            material=data.get('material', 'copper')
+        )
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Mobile Notebook API ---
+
+@app.post("/api/notebook/mobile")
+async def create_notebook_entry_mobile(data: Dict[str, Any]):
+    """Create a new notebook entry from mobile."""
+    try:
+        entry_id = notebook.create_entry(
+            title=data.get('title', ''),
+            content=data.get('content', ''),
+            entry_type=data.get('entry_type', 'text'),
+            project_id=data.get('project_id'),
+            experiment_id=data.get('experiment_id'),
+            tags=data.get('tags'),
+            attachments=data.get('attachments'),
+            voice_transcription=data.get('voice_transcription')
+        )
+        return {"success": True, "entry_id": entry_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/notebook/mobile/{entry_id}")
+async def get_notebook_entry_mobile(entry_id: int):
+    """Get a notebook entry by ID for mobile."""
+    try:
+        entry = notebook.get_entry(entry_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Notebook entry not found")
+        return {"success": True, "data": entry}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/notebook/mobile/{entry_id}")
+async def update_notebook_entry_mobile(entry_id: int, data: Dict[str, Any]):
+    """Update a notebook entry from mobile."""
+    try:
+        success = db.update_notebook_entry(entry_id, **data)
+        if not success:
+            raise HTTPException(status_code=404, detail="Notebook entry not found")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/notebook/mobile/{entry_id}")
+async def delete_notebook_entry_mobile(entry_id: int):
+    """Delete a notebook entry from mobile."""
+    try:
+        success = db.delete_notebook_entry(entry_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Notebook entry not found")
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Static Files Mounting ---
 
 static_dir = Path(__file__).parent / "web" / "static"
@@ -2550,7 +3546,7 @@ async def shutdown_event():
 if __name__ == "__main__":
     import uvicorn
     
-    host = os.getenv("API_HOST", "127.0.0.1")
+    host = os.getenv("API_HOST", "0.0.0.0")
     port = int(os.getenv("API_PORT", "8000"))
     
     print("[info] Starting Unified Lab R&D Operating System Server...")

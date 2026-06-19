@@ -1,23 +1,37 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import SearchBar from '../../components/common/SearchBar';
 import StatusBadge from '../../components/common/StatusBadge';
 import ProjectCard from '../../components/lists/ProjectCard';
+import { projectsApi, Project } from '../../services/api';
 
 export default function ProjectsScreen({ navigation }: any) {
   const theme = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('All');
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const projects = [
-    { id: 1, name: 'Circuit Analysis', status: 'Active', progress: 75, lastUpdated: '2 hours ago' },
-    { id: 2, name: 'Sensor Calibration', status: 'Active', progress: 45, lastUpdated: '1 day ago' },
-    { id: 3, name: 'Power Supply Test', status: 'Paused', progress: 30, lastUpdated: '3 days ago' },
-    { id: 4, name: 'Thermal Analysis', status: 'Completed', progress: 100, lastUpdated: '1 week ago' },
-    { id: 5, name: 'Signal Processing', status: 'Active', progress: 60, lastUpdated: '5 hours ago' },
-  ];
+  useEffect(() => {
+    loadProjects();
+  }, []);
+
+  const loadProjects = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await projectsApi.getAll();
+      setProjects(data);
+    } catch (err) {
+      setError('Failed to load projects');
+      console.error('Error loading projects:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const statusFilters = ['All', 'Active', 'Completed', 'Paused'];
 
@@ -34,7 +48,10 @@ export default function ProjectsScreen({ navigation }: any) {
         <Text style={[styles.title, { color: theme.colors.onBackground }]}>
           Projects
         </Text>
-        <TouchableOpacity style={[styles.addButton, { backgroundColor: theme.colors.primary }]}>
+        <TouchableOpacity 
+          style={[styles.addButton, { backgroundColor: theme.colors.primary }]}
+          onPress={() => console.log('Add new project')}
+        >
           <Ionicons name="add" size={24} color="white" />
         </TouchableOpacity>
       </View>
@@ -78,14 +95,34 @@ export default function ProjectsScreen({ navigation }: any) {
 
       {/* Projects List */}
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-        {filteredProjects.length > 0 ? (
+        {loading ? (
+          <View style={styles.loadingState}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={[styles.loadingText, { color: theme.colors.onSurfaceVariant }]}>
+              Loading projects...
+            </Text>
+          </View>
+        ) : error ? (
+          <View style={styles.errorState}>
+            <Ionicons name="alert-circle" size={64} color={theme.colors.error} />
+            <Text style={[styles.errorText, { color: theme.colors.onSurfaceVariant }]}>
+              {error}
+            </Text>
+            <TouchableOpacity
+              style={[styles.retryButton, { backgroundColor: theme.colors.primary }]}
+              onPress={loadProjects}
+            >
+              <Text style={styles.retryButtonText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : filteredProjects.length > 0 ? (
           filteredProjects.map((project) => (
             <ProjectCard
               key={project.id}
               name={project.name}
               status={project.status}
-              progress={project.progress}
-              lastUpdated={project.lastUpdated}
+              progress={0}
+              lastUpdated={project.updated_at ? new Date(project.updated_at).toLocaleDateString() : 'Unknown'}
               onPress={() => navigation.navigate('ProjectDetail', { projectId: project.id })}
             />
           ))
@@ -130,6 +167,7 @@ const styles = StyleSheet.create({
   filtersScroll: {
     paddingHorizontal: 16,
     marginBottom: 8,
+    flexGrow: 0,
   },
   filtersContent: {
     paddingRight: 8,
@@ -162,5 +200,37 @@ const styles = StyleSheet.create({
   emptySubtext: {
     fontSize: 14,
     marginTop: 8,
+  },
+  loadingState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 64,
+  },
+  loadingText: {
+    fontSize: 16,
+    marginTop: 16,
+  },
+  errorState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 64,
+  },
+  errorText: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 16,
+  },
+  retryButton: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 16,
+  },
+  retryButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

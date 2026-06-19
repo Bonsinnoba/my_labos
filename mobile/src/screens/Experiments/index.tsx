@@ -1,28 +1,41 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import SearchBar from '../../components/common/SearchBar';
 import ExperimentCard from '../../components/lists/ExperimentCard';
+import { experimentsApi, Experiment } from '../../services/api';
 
 export default function ExperimentsScreen({ navigation }: any) {
   const theme = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('All');
+  const [experiments, setExperiments] = useState<Experiment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const experiments = [
-    { id: 1, title: 'Voltage Stability Test', status: 'COMPLETED', projectName: 'Circuit Analysis', date: '2024-02-01' },
-    { id: 2, title: 'Current Measurement', status: 'IN_PROGRESS', projectName: 'Circuit Analysis', date: '2024-02-10' },
-    { id: 3, title: 'Thermal Analysis', status: 'PENDING', projectName: 'Circuit Analysis', date: '2024-02-15' },
-    { id: 4, title: 'Frequency Response', status: 'COMPLETED', projectName: 'Sensor Calibration', date: '2024-01-28' },
-    { id: 5, title: 'Noise Measurement', status: 'IN_PROGRESS', projectName: 'Sensor Calibration', date: '2024-02-08' },
-  ];
+  useEffect(() => {
+    loadExperiments();
+  }, []);
+
+  const loadExperiments = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await experimentsApi.getAll();
+      setExperiments(data);
+    } catch (err) {
+      setError('Failed to load experiments');
+      console.error('Error loading experiments:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const statusFilters = ['All', 'COMPLETED', 'IN_PROGRESS', 'PENDING', 'FAILED'];
 
   const filteredExperiments = experiments.filter(experiment => {
-    const matchesSearch = experiment.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         experiment.projectName.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = experiment.title.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesFilter = filterStatus === 'All' || experiment.status === filterStatus;
     return matchesSearch && matchesFilter;
   });
@@ -34,7 +47,10 @@ export default function ExperimentsScreen({ navigation }: any) {
         <Text style={[styles.title, { color: theme.colors.onBackground }]}>
           Experiments
         </Text>
-        <TouchableOpacity style={[styles.addButton, { backgroundColor: theme.colors.primary }]}>
+        <TouchableOpacity 
+          style={[styles.addButton, { backgroundColor: theme.colors.primary }]}
+          onPress={() => console.log('Add new experiment')}
+        >
           <Ionicons name="add" size={24} color="white" />
         </TouchableOpacity>
       </View>
@@ -59,7 +75,7 @@ export default function ExperimentsScreen({ navigation }: any) {
               styles.filterChip,
               {
                 backgroundColor: filterStatus === status ? theme.colors.primary : theme.colors.surface,
-                borderColor: filterStatus === status ? theme.colors.primary : theme.colors.border,
+                borderColor: filterStatus === status ? theme.colors.primary : '#E0E0E0',
               },
             ]}
             onPress={() => setFilterStatus(status)}
@@ -78,14 +94,34 @@ export default function ExperimentsScreen({ navigation }: any) {
 
       {/* Experiments List */}
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-        {filteredExperiments.length > 0 ? (
+        {loading ? (
+          <View style={styles.loadingState}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={[styles.loadingText, { color: theme.colors.onSurfaceVariant }]}>
+              Loading experiments...
+            </Text>
+          </View>
+        ) : error ? (
+          <View style={styles.errorState}>
+            <Ionicons name="alert-circle" size={64} color={theme.colors.error} />
+            <Text style={[styles.errorText, { color: theme.colors.onSurfaceVariant }]}>
+              {error}
+            </Text>
+            <TouchableOpacity
+              style={[styles.retryButton, { backgroundColor: theme.colors.primary }]}
+              onPress={loadExperiments}
+            >
+              <Text style={styles.retryButtonText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : filteredExperiments.length > 0 ? (
           filteredExperiments.map((experiment) => (
             <ExperimentCard
               key={experiment.id}
               title={experiment.title}
               status={experiment.status}
-              projectName={experiment.projectName}
-              date={experiment.date}
+              projectName={`Project ${experiment.project_id}`}
+              date={experiment.updated_at ? new Date(experiment.updated_at).toLocaleDateString() : 'Unknown'}
               onPress={() => navigation.navigate('ExperimentDetail', { experimentId: experiment.id })}
             />
           ))
@@ -130,6 +166,7 @@ const styles = StyleSheet.create({
   filtersScroll: {
     paddingHorizontal: 16,
     marginBottom: 8,
+    flexGrow: 0,
   },
   filtersContent: {
     paddingRight: 8,
@@ -162,5 +199,37 @@ const styles = StyleSheet.create({
   emptySubtext: {
     fontSize: 14,
     marginTop: 8,
+  },
+  loadingState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 64,
+  },
+  loadingText: {
+    fontSize: 16,
+    marginTop: 16,
+  },
+  errorState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 64,
+  },
+  errorText: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 16,
+  },
+  retryButton: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 16,
+  },
+  retryButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

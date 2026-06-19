@@ -1,32 +1,43 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import SearchBar from '../../components/common/SearchBar';
 import ResourceCard from '../../components/lists/ResourceCard';
+import { resourcesApi, Resource } from '../../services/api';
 
 export default function ResourcesScreen({ navigation }: any) {
   const theme = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<string>('All');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const [resources, setResources] = useState<Resource[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const resources = [
-    { id: 1, title: 'Circuit Analysis Report', type: 'PDF', size: '2.4MB', date: '2024-02-01' },
-    { id: 2, title: 'Voltage Data CSV', type: 'CSV', size: '156KB', date: '2024-02-01' },
-    { id: 3, title: 'Test Setup Photo', type: 'IMAGE', size: '1.2MB', date: '2024-02-01' },
-    { id: 4, title: 'Sensor Calibration Guide', type: 'PDF', size: '890KB', date: '2024-01-28' },
-    { id: 5, title: 'Frequency Response Data', type: 'CSV', size: '245KB', date: '2024-01-28' },
-    { id: 6, title: 'Thermal Analysis Video', type: 'VIDEO', size: '45MB', date: '2024-01-25' },
-    { id: 7, title: 'Power Supply Specs', type: 'PDF', size: '1.5MB', date: '2024-01-20' },
-    { id: 8, title: 'Equipment Manual', type: 'PDF', size: '3.2MB', date: '2024-01-15' },
-  ];
+  useEffect(() => {
+    loadResources();
+  }, []);
+
+  const loadResources = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await resourcesApi.getAll();
+      setResources(data);
+    } catch (err) {
+      setError('Failed to load resources');
+      console.error('Error loading resources:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const typeFilters = ['All', 'PDF', 'CSV', 'IMAGE', 'VIDEO'];
 
   const filteredResources = resources.filter(resource => {
     const matchesSearch = resource.title.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesFilter = filterType === 'All' || resource.type === filterType;
+    const matchesFilter = filterType === 'All' || (resource.file_path && resource.file_path.includes(filterType.toLowerCase()));
     return matchesSearch && matchesFilter;
   });
 
@@ -69,7 +80,7 @@ export default function ResourcesScreen({ navigation }: any) {
               styles.filterChip,
               {
                 backgroundColor: filterType === type ? theme.colors.primary : theme.colors.surface,
-                borderColor: filterType === type ? theme.colors.primary : theme.colors.border,
+                borderColor: filterType === type ? theme.colors.primary : '#E0E0E0',
               },
             ]}
             onPress={() => setFilterType(type)}
@@ -88,14 +99,34 @@ export default function ResourcesScreen({ navigation }: any) {
 
       {/* Resources List */}
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-        {filteredResources.length > 0 ? (
+        {loading ? (
+          <View style={styles.loadingState}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={[styles.loadingText, { color: theme.colors.onSurfaceVariant }]}>
+              Loading resources...
+            </Text>
+          </View>
+        ) : error ? (
+          <View style={styles.errorState}>
+            <Ionicons name="alert-circle" size={64} color={theme.colors.error} />
+            <Text style={[styles.errorText, { color: theme.colors.onSurfaceVariant }]}>
+              {error}
+            </Text>
+            <TouchableOpacity
+              style={[styles.retryButton, { backgroundColor: theme.colors.primary }]}
+              onPress={loadResources}
+            >
+              <Text style={styles.retryButtonText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : filteredResources.length > 0 ? (
           filteredResources.map((resource) => (
             <ResourceCard
               key={resource.id}
               title={resource.title}
-              type={resource.type}
-              size={resource.size}
-              date={resource.date}
+              type={resource.file_path?.split('.').pop()?.toUpperCase() || 'FILE'}
+              size={resource.file_path || 'Unknown'}
+              date={resource.created_at ? new Date(resource.created_at).toLocaleDateString() : 'Unknown'}
               onPress={() => navigation.navigate('ResourceDetail', { resourceId: resource.id })}
             />
           ))
@@ -140,6 +171,7 @@ const styles = StyleSheet.create({
   filtersScroll: {
     paddingHorizontal: 16,
     marginBottom: 8,
+    flexGrow: 0,
   },
   filtersContent: {
     paddingRight: 8,
@@ -172,5 +204,37 @@ const styles = StyleSheet.create({
   emptySubtext: {
     fontSize: 14,
     marginTop: 8,
+  },
+  loadingState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 64,
+  },
+  loadingText: {
+    fontSize: 16,
+    marginTop: 16,
+  },
+  errorState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 64,
+  },
+  errorText: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 16,
+  },
+  retryButton: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 16,
+  },
+  retryButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

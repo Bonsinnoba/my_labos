@@ -171,6 +171,7 @@ const styles = StyleSheet.create({
   filtersScroll: {
     paddingHorizontal: 16,
     marginBottom: 8,
+    flexGrow: 0,
   },
   filtersContent: {
     paddingRight: 8,
