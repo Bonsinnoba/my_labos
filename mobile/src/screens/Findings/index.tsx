@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
-import SearchBar from '../../components/common/SearchBar';
+import AdvancedSearchBar from '../../components/common/AdvancedSearchBar';
 import Card from '../../components/common/Card';
 import StatusBadge from '../../components/common/StatusBadge';
 
@@ -38,8 +38,8 @@ export default function FindingsScreen({ navigation }: any) {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      {/* Header */}
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      {/* Fixed Header */}
       <View style={styles.header}>
         <Text style={[styles.title, { color: theme.colors.onBackground }]}>
           Findings
@@ -49,54 +49,60 @@ export default function FindingsScreen({ navigation }: any) {
         </TouchableOpacity>
       </View>
 
-      {/* Search */}
-      <SearchBar
-        placeholder="Search findings..."
-        onSearch={setSearchQuery}
-      />
-
-      {/* Severity Filters */}
-      <ScrollView 
-        horizontal 
-        showsHorizontalScrollIndicator={false}
-        style={styles.filtersScroll}
-        contentContainerStyle={styles.filtersContent}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        style={styles.scrollContent}
       >
-        {severityFilters.map((severity) => (
-          <TouchableOpacity
-            key={severity}
-            style={[
-              styles.filterChip,
-              {
-                backgroundColor: filterSeverity === severity ? getSeverityColor(severity) : theme.colors.surface,
-                borderColor: filterSeverity === severity ? getSeverityColor(severity) : theme.colors.border,
-              },
-            ]}
-            onPress={() => setFilterSeverity(severity)}
-          >
-            <Text
-              style={[
-                styles.filterText,
-                { color: filterSeverity === severity ? 'white' : theme.colors.onSurface },
-              ]}
-            >
-              {severity}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+        {/* Search */}
+        <AdvancedSearchBar
+          placeholder="Search findings..."
+          onSearch={setSearchQuery}
+          showFilters={false}
+          debounceMs={300}
+        />
 
-      {/* Findings List */}
-      <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-        {filteredFindings.length > 0 ? (
-          filteredFindings.map((finding) => (
-            <Card
-              key={finding.id}
-              elevation={0}
-              onPress={() => navigation.navigate('FindingDetail', { findingId: finding.id })}
+        {/* Severity Filters */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.filtersScroll}
+          contentContainerStyle={styles.filtersContent}
+        >
+          {severityFilters.map((severity) => (
+            <TouchableOpacity
+              key={severity}
+              style={[
+                styles.filterChip,
+                {
+                  backgroundColor: filterSeverity === severity ? getSeverityColor(severity) : theme.colors.surface,
+                  borderColor: filterSeverity === severity ? getSeverityColor(severity) : theme.colors.border,
+                },
+              ]}
+              onPress={() => setFilterSeverity(severity)}
             >
-              <View style={styles.findingHeader}>
-                <View style={styles.findingTitleContainer}>
+              <Text
+                style={[
+                  styles.filterText,
+                  { color: filterSeverity === severity ? 'white' : theme.colors.onSurface },
+                ]}
+              >
+                {severity}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {/* Findings List */}
+        <View style={styles.list}>
+          {filteredFindings.length > 0 ? (
+            filteredFindings.map((finding) => (
+              <Card
+                key={finding.id}
+                elevation={0}
+                onPress={() => navigation.navigate('FindingDetail', { findingId: finding.id })}
+              >
+                <View style={styles.findingHeader}>
+                  <View style={styles.findingTitleContainer}>
                   <Text style={[styles.findingTitle, { color: theme.colors.onSurface }]} numberOfLines={2}>
                     {finding.title}
                   </Text>
@@ -141,8 +147,9 @@ export default function FindingsScreen({ navigation }: any) {
             </Text>
           </View>
         )}
+      </View>
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -156,6 +163,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     paddingTop: 20,
+  },
+  scrollContent: {
+    flex: 1,
   },
   title: {
     fontSize: 28,

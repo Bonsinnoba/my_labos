@@ -7,7 +7,7 @@ pyarrow>=14.0.0
 # Voice Assistant Dependencies
 SpeechRecognition>=3.10.0
 pyttsx3>=2.90
-pyaudio>=0.2.13
+# pyaudio>=0.2.13  # Removed: requires PortAudio system libraries, not currently used
 
 # Web Server Dependencies
 fastapi>=0.104.0

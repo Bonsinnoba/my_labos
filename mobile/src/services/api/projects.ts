@@ -1,4 +1,5 @@
 import apiClient from './client';
+import { offlineCache } from '../cache/offlineCache';
 
 export interface Project {
   id: number;
@@ -30,26 +31,56 @@ export interface UpdateProjectRequest {
 export const projectsApi = {
   // Get all projects
   getAll: async (): Promise<Project[]> => {
-    return apiClient.get<Project[]>('/api/projects');
+    try {
+      const projects = await apiClient.get<Project[]>('/api/projects');
+      await offlineCache.set('projects', projects);
+      return projects;
+    } catch (error) {
+      console.error('[projectsApi] Cloud API failed, using cache:', error);
+      const cachedProjects = await offlineCache.get<Project[]>('projects');
+      if (cachedProjects) {
+        console.log('[projectsApi] Using cached projects');
+        return cachedProjects;
+      }
+      throw error;
+    }
   },
 
   // Get project by ID
   getById: async (id: number): Promise<Project> => {
-    return apiClient.get<Project>(`/api/projects/${id}`);
+    try {
+      return await apiClient.get<Project>(`/api/projects/${id}`);
+    } catch (error) {
+      console.error('[projectsApi] Cloud API failed for getById:', error);
+      const cachedProjects = await offlineCache.get<Project[]>('projects');
+      if (cachedProjects) {
+        const project = cachedProjects.find(p => p.id === id);
+        if (project) {
+          console.log('[projectsApi] Using cached project');
+          return project;
+        }
+      }
+      throw error;
+    }
   },
 
   // Create new project
   create: async (data: CreateProjectRequest): Promise<Project> => {
-    return apiClient.post<Project>('/api/projects', data);
+    const project = await apiClient.post<Project>('/api/projects', data);
+    await offlineCache.remove('projects');
+    return project;
   },
 
   // Update project
   update: async (id: number, data: UpdateProjectRequest): Promise<Project> => {
-    return apiClient.put<Project>(`/api/projects/${id}`, data);
+    const project = await apiClient.put<Project>(`/api/projects/${id}`, data);
+    await offlineCache.remove('projects');
+    return project;
   },
 
   // Delete project
   delete: async (id: number): Promise<void> => {
-    return apiClient.delete<void>(`/api/projects/${id}`);
+    await apiClient.delete<void>(`/api/projects/${id}`);
+    await offlineCache.remove('projects');
   },
 };

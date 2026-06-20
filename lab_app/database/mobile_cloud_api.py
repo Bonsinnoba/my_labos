@@ -9,13 +9,14 @@ Mobile devices can:
 - Fetch individual transactions from mesh sync
 - Download files directly from cloud storage
 - Push their own transactions to cloud (for mobile-to-lab sync)
+- Access Gemini AI assistant features
 """
 
 import json
 import gzip
 import sqlite3
 import os
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Generator
 from datetime import datetime
 from pathlib import Path
 import hashlib
@@ -27,6 +28,14 @@ try:
 except ImportError:
     BOTO3_AVAILABLE = False
     print("[mobile_cloud_api] boto3 not available - cloud API disabled")
+
+# Optional Gemini import
+try:
+    from gemini_service import GeminiLabAssistant
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    GeminiLabAssistant = None
 
 
 class MobileCloudAPI:
@@ -42,25 +51,36 @@ class MobileCloudAPI:
                  b2_endpoint_url: str,
                  b2_access_key_id: str,
                  b2_secret_access_key: str,
-                 snapshot_prefix: str = "db_snapshots"):
+                 snapshot_prefix: str = "db_snapshots",
+                 gemini_api_key: Optional[str] = None):
         """
         Initialize the Mobile Cloud API.
-        
+
         Args:
             b2_bucket_name: Backblaze B2 bucket name for data storage
             b2_endpoint_url: Backblaze B2 endpoint URL
             b2_access_key_id: Backblaze B2 access key ID
             b2_secret_access_key: Backblaze B2 secret access key
             snapshot_prefix: Prefix for database snapshot files in B2
+            gemini_api_key: Optional Gemini API key for AI features
         """
         self.b2_bucket_name = b2_bucket_name
         self.b2_endpoint_url = b2_endpoint_url
         self.b2_access_key_id = b2_access_key_id
         self.b2_secret_access_key = b2_secret_access_key
         self.snapshot_prefix = snapshot_prefix
-        
+
         self.s3_client = None
         self._init_b2_client()
+
+        # Initialize Gemini AI assistant
+        self.gemini_assistant = None
+        if GEMINI_AVAILABLE and gemini_api_key:
+            try:
+                self.gemini_assistant = GeminiLabAssistant(api_key=gemini_api_key)
+                print("[mobile_cloud_api] Gemini AI assistant initialized")
+            except Exception as e:
+                print(f"[mobile_cloud_api] Failed to initialize Gemini: {e}")
     
     def _init_b2_client(self) -> None:
         """Initialize Backblaze B2 S3 client."""
@@ -282,18 +302,132 @@ class MobileCloudAPI:
     def is_available(self) -> bool:
         """
         Check if the cloud API is available.
-        
+
         Returns:
             True if available, False otherwise
         """
         return self.s3_client is not None
+
+    def is_gemini_available(self) -> bool:
+        """
+        Check if Gemini AI features are available.
+
+        Returns:
+            True if available, False otherwise
+        """
+        return self.gemini_assistant is not None
+
+    # Gemini AI Methods for Mobile Access
+
+    def review_stage_design(self, stage_context: Dict[str, Any]) -> Generator[str, None, None]:
+        """
+        Feature A: Stage Design Reviewer - Analyze project stage for thermal risks, component mismatches, or logic flaws.
+
+        Args:
+            stage_context: Dictionary containing Stage Goals, Experiment Logs, and Parts used
+
+        Yields:
+            Streaming response tokens
+        """
+        if not self.gemini_assistant:
+            yield "Gemini AI not available. Configure GEMINI_API_KEY to enable AI features."
+            return
+
+        try:
+            for chunk in self.gemini_assistant.review_stage_data(stage_context):
+                yield chunk
+        except Exception as e:
+            yield f"Error generating review: {str(e)}"
+
+    def find_component_alternates(self, component_details: str) -> Generator[str, None, None]:
+        """
+        Feature B: Smart Substitute Finder - Find pin-compatible, drop-in alternatives for components.
+
+        Args:
+            component_details: String describing the component (name, specs, etc.)
+
+        Yields:
+            Streaming response tokens
+        """
+        if not self.gemini_assistant:
+            yield "Gemini AI not available. Configure GEMINI_API_KEY to enable AI features."
+            return
+
+        try:
+            for chunk in self.gemini_assistant.find_alternates(component_details):
+                yield chunk
+        except Exception as e:
+            yield f"Error finding alternatives: {str(e)}"
+
+    def diagnose_circuit_failure(self, observation: str, experiment_history: List[Dict[str, Any]]) -> Generator[str, None, None]:
+        """
+        Feature C: Failure Mode Analyzer - Diagnose circuit failures based on observations and experiment history.
+
+        Args:
+            observation: Raw user observation of the failure
+            experiment_history: List of recent experiment data
+
+        Yields:
+            Streaming response tokens
+        """
+        if not self.gemini_assistant:
+            yield "Gemini AI not available. Configure GEMINI_API_KEY to enable AI features."
+            return
+
+        try:
+            for chunk in self.gemini_assistant.diagnose_failure(observation, experiment_history):
+                yield chunk
+        except Exception as e:
+            yield f"Error diagnosing failure: {str(e)}"
+
+    def generate_test_script(self, requirement: str, language: str = "python") -> Generator[str, None, None]:
+        """
+        Feature D: Lab Automation Scripting - Generate production-ready test automation scripts.
+
+        Args:
+            requirement: Description of the test requirement
+            language: Target language (python, cpp, arduino)
+
+        Yields:
+            Streaming response tokens
+        """
+        if not self.gemini_assistant:
+            yield "Gemini AI not available. Configure GEMINI_API_KEY to enable AI features."
+            return
+
+        try:
+            for chunk in self.gemini_assistant.generate_test_script(requirement, language):
+                yield chunk
+        except Exception as e:
+            yield f"Error generating script: {str(e)}"
+
+    def chat(self, message: str, conversation_history: List[Dict[str, str]] = None) -> Generator[str, None, None]:
+        """
+        General Chat Interface - Handle general conversations with Gemini.
+
+        Args:
+            message: User's message
+            conversation_history: Optional list of previous messages for context
+
+        Yields:
+            Streaming response tokens
+        """
+        if not self.gemini_assistant:
+            yield "Gemini AI not available. Configure GEMINI_API_KEY to enable AI features."
+            return
+
+        try:
+            for chunk in self.gemini_assistant.chat(message, conversation_history):
+                yield chunk
+        except Exception as e:
+            yield f"Error generating response: {str(e)}"
 
 
 # Convenience function to create mobile cloud API from environment variables
 def create_mobile_cloud_api() -> Optional[MobileCloudAPI]:
     """
     Create a MobileCloudAPI instance from environment variables.
-    
+
     Returns:
         MobileCloudAPI instance or None if credentials not available
     """
@@ -301,14 +435,16 @@ def create_mobile_cloud_api() -> Optional[MobileCloudAPI]:
     b2_endpoint_url = os.getenv("ACCOUNT_2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com")
     b2_access_key_id = os.getenv("ACCOUNT_2_KEY_ID", "")
     b2_secret_access_key = os.getenv("ACCOUNT_2_APPLICATION_KEY", "")
-    
+    gemini_api_key = os.getenv("GEMINI_API_KEY", "")
+
     if not b2_access_key_id or not b2_secret_access_key:
         print("[mobile_cloud_api] B2 credentials not provided")
         return None
-    
+
     return MobileCloudAPI(
         b2_bucket_name=b2_bucket_name,
         b2_endpoint_url=b2_endpoint_url,
         b2_access_key_id=b2_access_key_id,
-        b2_secret_access_key=b2_secret_access_key
+        b2_secret_access_key=b2_secret_access_key,
+        gemini_api_key=gemini_api_key if gemini_api_key else None
     )

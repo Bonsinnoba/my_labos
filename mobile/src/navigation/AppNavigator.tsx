@@ -3,8 +3,13 @@ import { createStackNavigator } from '@react-navigation/stack';
 import TabNavigator from './TabNavigator';
 import ProjectDetailScreen from '../screens/Projects/ProjectDetail';
 import ExperimentDetailScreen from '../screens/Experiments/ExperimentDetail';
-import ResourceDetailScreen from '../screens/Resources/ResourceDetail';
 import FindingDetailScreen from '../screens/Findings/FindingDetail';
+import PrivacyScreen from '../screens/Settings/PrivacyScreen';
+import TermsScreen from '../screens/Settings/TermsScreen';
+import HelpScreen from '../screens/Settings/HelpScreen';
+import PINSetupScreen from '../screens/Settings/PINSetupScreen';
+import SearchScreen from '../screens/Search';
+import PINLockScreen from '../screens/Settings/PINLockScreen';
 
 const Stack = createStackNavigator();
 
@@ -23,9 +28,14 @@ export default function AppNavigator() {
     >
       <Stack.Screen
         name="MainTabs"
-        component={TabNavigator}
         options={{ headerShown: false }}
-      />
+      >
+        {() => (
+          <PINLockScreen>
+            <TabNavigator />
+          </PINLockScreen>
+        )}
+      </Stack.Screen>
       <Stack.Screen
         name="ProjectDetail"
         component={ProjectDetailScreen}
@@ -37,14 +47,34 @@ export default function AppNavigator() {
         options={{ title: 'Experiment Details' }}
       />
       <Stack.Screen
-        name="ResourceDetail"
-        component={ResourceDetailScreen}
-        options={{ title: 'Resource Details' }}
-      />
-      <Stack.Screen
         name="FindingDetail"
         component={FindingDetailScreen}
         options={{ title: 'Finding Details' }}
+      />
+      <Stack.Screen
+        name="Privacy"
+        component={PrivacyScreen}
+        options={{ title: 'Privacy' }}
+      />
+      <Stack.Screen
+        name="Terms"
+        component={TermsScreen}
+        options={{ title: 'Terms of Service' }}
+      />
+      <Stack.Screen
+        name="Help"
+        component={HelpScreen}
+        options={{ title: 'Help & Support' }}
+      />
+      <Stack.Screen
+        name="PINSetup"
+        component={PINSetupScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="Search"
+        component={SearchScreen}
+        options={{ title: 'Search' }}
       />
     </Stack.Navigator>
   );

@@ -1,5 +1,6 @@
 import { syncApi, SyncTransaction } from '../api';
 import mobileCloudApiClient from '../api/mobileCloud';
+import { offlineCache } from '../cache/offlineCache';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export interface SyncConfig {
@@ -49,25 +50,41 @@ export class SyncService {
       this.isSyncing = true;
 
       let transactions: any[] = [];
-      let updates: any[] = [];
 
-      // Try cloud API first (direct cloud access)
+      // Only use cloud API - no lab computer fallback
       if (mobileCloudApiClient && mobileCloudApiClient.isConfigured()) {
         console.log('[SyncService] Using cloud API for sync');
         try {
-          const cloudResponse = await mobileCloudApiClient.getTransactions();
-          transactions = cloudResponse.transactions;
-          console.log(`[SyncService] Fetched ${transactions.length} transactions from cloud`);
-        } catch (cloudError) {
-          console.error('[SyncService] Cloud API sync failed, falling back to desktop API:', cloudError);
-        }
-      }
+          // Get last sync timestamp for difference detection
+          const cachedData = await offlineCache.getWithTimestamp<{ lastSyncTimestamp: number }>('sync_metadata');
+          const sinceTimestamp = cachedData?.timestamp || 0;
 
-      // Fallback to desktop API if cloud not available or failed
-      if (transactions.length === 0) {
-        console.log('[SyncService] Using desktop API for sync');
-        transactions = await syncApi.getTransactions();
-        updates = await syncApi.getUpdates();
+          const cloudResponse = await mobileCloudApiClient.getTransactions(sinceTimestamp);
+          transactions = cloudResponse.transactions;
+          console.log(`[SyncService] Fetched ${transactions.length} transactions from cloud since ${sinceTimestamp}`);
+
+          // Cache transactions for offline use
+          if (transactions.length > 0) {
+            await offlineCache.set('transactions', transactions);
+            await offlineCache.set('sync_metadata', { lastSyncTimestamp: Date.now() });
+            console.log('[SyncService] Cached transactions for offline use');
+          }
+        } catch (cloudError) {
+          console.error('[SyncService] Cloud API sync failed:', cloudError);
+          // Return cached data if available
+          const cachedTransactions = await offlineCache.get<any[]>('transactions');
+          if (cachedTransactions && cachedTransactions.length > 0) {
+            console.log('[SyncService] Using cached transactions (offline mode)');
+            return {
+              success: true,
+              message: `Using ${cachedTransactions.length} cached transactions (offline mode)`
+            };
+          }
+          return { success: false, message: 'Cloud sync failed - check internet connection' };
+        }
+      } else {
+        console.error('[SyncService] Cloud API not configured');
+        return { success: false, message: 'Cloud API not configured - add B2 credentials' };
       }
 
       // Update last sync time
@@ -75,9 +92,9 @@ export class SyncService {
       config.lastSync = new Date().toISOString();
       await this.saveSyncConfig(config);
 
-      return { 
-        success: true, 
-        message: `Synced ${transactions.length} transactions and ${updates.length} updates` 
+      return {
+        success: true,
+        message: `Synced ${transactions.length} transactions from cloud`
       };
     } catch (error) {
       console.error('Sync error:', error);
@@ -89,7 +106,7 @@ export class SyncService {
 
   async pushTransaction(transaction: Partial<SyncTransaction>): Promise<SyncTransaction | null> {
     try {
-      // Try cloud API first (direct cloud access)
+      // Only use cloud API - no lab computer fallback
       if (mobileCloudApiClient && mobileCloudApiClient.isConfigured()) {
         console.log('[SyncService] Pushing transaction to cloud');
         try {
@@ -102,16 +119,18 @@ export class SyncService {
           if (result.success) {
             console.log('[SyncService] Transaction pushed to cloud successfully');
             return transaction as SyncTransaction;
+          } else {
+            console.error('[SyncService] Cloud API push returned failure');
+            return null;
           }
         } catch (cloudError) {
-          console.error('[SyncService] Cloud API push failed, falling back to desktop API:', cloudError);
+          console.error('[SyncService] Cloud API push failed:', cloudError);
+          return null;
         }
+      } else {
+        console.error('[SyncService] Cloud API not configured');
+        return null;
       }
-
-      // Fallback to desktop API
-      console.log('[SyncService] Pushing transaction to desktop API');
-      const result = await syncApi.pushTransaction(transaction);
-      return result;
     } catch (error) {
       console.error('Error pushing transaction:', error);
       return null;

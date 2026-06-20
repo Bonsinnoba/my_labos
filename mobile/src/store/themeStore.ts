@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useSettingsStore } from './settingsStore';
 
 interface ThemeState {
   isDark: boolean;

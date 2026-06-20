@@ -2,7 +2,7 @@ import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosResp
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { cloudClient } from '../cloud/cloudClient';
 
-const DEFAULT_API_BASE_URL = process.env.EXPO_PUBLIC_CLOUD_API_URL || process.env.CLOUD_API_URL || 'http://192.168.100.5:8000';
+const DEFAULT_API_BASE_URL = process.env.EXPO_PUBLIC_CLOUD_API_URL || process.env.CLOUD_API_URL || 'http://localhost:8000';
 
 class ApiClient {
   private client: AxiosInstance;
@@ -10,8 +10,10 @@ class ApiClient {
   private cloudMode: boolean = true;
 
   constructor() {
-    const envApiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || process.env.API_BASE_URL;
-    this.baseURL = envApiUrl || DEFAULT_API_BASE_URL;
+    // Prioritize cloud API URL over local lab computer URL
+    const cloudApiUrl = process.env.EXPO_PUBLIC_CLOUD_API_URL || process.env.CLOUD_API_URL;
+    const localApiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || process.env.API_BASE_URL;
+    this.baseURL = cloudApiUrl || localApiUrl || DEFAULT_API_BASE_URL;
     this.client = axios.create({
       baseURL: this.baseURL,
       timeout: Number(process.env.EXPO_PUBLIC_API_TIMEOUT || process.env.API_TIMEOUT || 30000),

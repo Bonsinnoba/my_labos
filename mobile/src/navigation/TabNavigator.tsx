@@ -4,7 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import DashboardScreen from '../screens/Dashboard';
 import ProjectsScreen from '../screens/Projects';
 import ExperimentsScreen from '../screens/Experiments';
-import ResourcesScreen from '../screens/Resources';
+import NotebookScreen from '../screens/Notebook';
+import AIScreen from '../screens/AI';
 import SettingsScreen from '../screens/Settings';
 import { useAppStore } from '../store';
 
@@ -25,8 +26,10 @@ export default function TabNavigator() {
             iconName = focused ? 'folder' : 'folder-outline';
           } else if (route.name === 'Experiments') {
             iconName = focused ? 'flask' : 'flask-outline';
-          } else if (route.name === 'Resources') {
+          } else if (route.name === 'Notebook') {
             iconName = focused ? 'book' : 'book-outline';
+          } else if (route.name === 'AI') {
+            iconName = focused ? 'bulb' : 'bulb-outline';
           } else if (route.name === 'Settings') {
             iconName = focused ? 'settings' : 'settings-outline';
           } else {
@@ -43,7 +46,8 @@ export default function TabNavigator() {
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
       <Tab.Screen name="Projects" component={ProjectsScreen} />
       <Tab.Screen name="Experiments" component={ExperimentsScreen} />
-      <Tab.Screen name="Resources" component={ResourcesScreen} />
+      <Tab.Screen name="Notebook" component={NotebookScreen} />
+      <Tab.Screen name="AI" component={AIScreen} />
       <Tab.Screen name="Settings" component={SettingsScreen} />
     </Tab.Navigator>
   );

@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, SafeAreaView } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
-import SearchBar from '../../components/common/SearchBar';
+import AdvancedSearchBar from '../../components/common/AdvancedSearchBar';
 import ExperimentCard from '../../components/lists/ExperimentCard';
 import { experimentsApi, Experiment } from '../../services/api';
 
@@ -41,8 +41,8 @@ export default function ExperimentsScreen({ navigation }: any) {
   });
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      {/* Header */}
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      {/* Fixed Header */}
       <View style={styles.header}>
         <Text style={[styles.title, { color: theme.colors.onBackground }]}>
           Experiments
@@ -55,48 +55,54 @@ export default function ExperimentsScreen({ navigation }: any) {
         </TouchableOpacity>
       </View>
 
-      {/* Search */}
-      <SearchBar
-        placeholder="Search experiments..."
-        onSearch={setSearchQuery}
-      />
-
-      {/* Status Filters */}
-      <ScrollView 
-        horizontal 
-        showsHorizontalScrollIndicator={false}
-        style={styles.filtersScroll}
-        contentContainerStyle={styles.filtersContent}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        style={styles.scrollContent}
       >
-        {statusFilters.map((status) => (
-          <TouchableOpacity
-            key={status}
-            style={[
-              styles.filterChip,
-              {
-                backgroundColor: filterStatus === status ? theme.colors.primary : theme.colors.surface,
-                borderColor: filterStatus === status ? theme.colors.primary : '#E0E0E0',
-              },
-            ]}
-            onPress={() => setFilterStatus(status)}
-          >
-            <Text
-              style={[
-                styles.filterText,
-                { color: filterStatus === status ? 'white' : theme.colors.onSurface },
-              ]}
-            >
-              {status}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+        {/* Search */}
+        <AdvancedSearchBar
+          placeholder="Search experiments..."
+          onSearch={setSearchQuery}
+          showFilters={false}
+          debounceMs={300}
+        />
 
-      {/* Experiments List */}
-      <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
-        {loading ? (
-          <View style={styles.loadingState}>
-            <ActivityIndicator size="large" color={theme.colors.primary} />
+        {/* Status Filters */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.filtersScroll}
+          contentContainerStyle={styles.filtersContent}
+        >
+          {statusFilters.map((status) => (
+            <TouchableOpacity
+              key={status}
+              style={[
+                styles.filterChip,
+                {
+                  backgroundColor: filterStatus === status ? theme.colors.primary : theme.colors.surface,
+                  borderColor: filterStatus === status ? theme.colors.primary : '#E0E0E0',
+                },
+              ]}
+              onPress={() => setFilterStatus(status)}
+            >
+              <Text
+                style={[
+                  styles.filterText,
+                  { color: filterStatus === status ? 'white' : theme.colors.onSurface },
+                ]}
+              >
+                {status}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+
+        {/* Experiments List */}
+        <View style={styles.list}>
+          {loading ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator size="large" color={theme.colors.primary} />
             <Text style={[styles.loadingText, { color: theme.colors.onSurfaceVariant }]}>
               Loading experiments...
             </Text>
@@ -136,8 +142,9 @@ export default function ExperimentsScreen({ navigation }: any) {
             </Text>
           </View>
         )}
+      </View>
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -151,6 +158,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     paddingTop: 20,
+  },
+  scrollContent: {
+    flex: 1,
   },
   title: {
     fontSize: 28,

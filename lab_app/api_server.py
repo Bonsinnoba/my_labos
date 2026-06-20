@@ -557,15 +557,126 @@ async def push_mobile_transaction(transaction: Dict[str, Any]):
     """Push a transaction from mobile device to cloud (for mobile-to-lab sync)."""
     if not mobile_cloud_api or not mobile_cloud_api.is_available():
         raise HTTPException(status_code=503, detail="Mobile cloud API not available")
-    
+
     try:
         success = mobile_cloud_api.push_mobile_transaction(transaction)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to push transaction")
-        
+
         return {"success": True, "message": "Transaction pushed to cloud"}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Mobile Cloud AI API (Gemini) ---
+
+class StageReviewRequest(BaseModel):
+    stage_context: Dict[str, Any]
+
+class ComponentAlternatesRequest(BaseModel):
+    component_details: str
+
+class FailureDiagnosisRequest(BaseModel):
+    observation: str
+    experiment_history: List[Dict[str, Any]]
+
+class TestScriptRequest(BaseModel):
+    requirement: str
+    language: str = "python"
+
+class ChatRequest(BaseModel):
+    message: str
+    conversation_history: List[Dict[str, str]] = None
+
+
+@app.post("/api/mobile/ai/stage-review")
+async def mobile_review_stage_design(request: StageReviewRequest):
+    """Feature A: Stage Design Reviewer - Analyze project stage for thermal risks, component mismatches, or logic flaws."""
+    if not mobile_cloud_api or not mobile_cloud_api.is_gemini_available():
+        raise HTTPException(status_code=503, detail="Gemini AI not available. Configure GEMINI_API_KEY")
+
+    try:
+        from fastapi.responses import StreamingResponse
+
+        def generate():
+            for chunk in mobile_cloud_api.review_stage_design(request.stage_context):
+                yield chunk
+
+        return StreamingResponse(generate(), media_type="text/plain")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/mobile/ai/component-alternates")
+async def mobile_find_component_alternates(request: ComponentAlternatesRequest):
+    """Feature B: Smart Substitute Finder - Find pin-compatible, drop-in alternatives for components."""
+    if not mobile_cloud_api or not mobile_cloud_api.is_gemini_available():
+        raise HTTPException(status_code=503, detail="Gemini AI not available. Configure GEMINI_API_KEY")
+
+    try:
+        from fastapi.responses import StreamingResponse
+
+        def generate():
+            for chunk in mobile_cloud_api.find_component_alternates(request.component_details):
+                yield chunk
+
+        return StreamingResponse(generate(), media_type="text/plain")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/mobile/ai/failure-diagnosis")
+async def mobile_diagnose_circuit_failure(request: FailureDiagnosisRequest):
+    """Feature C: Failure Mode Analyzer - Diagnose circuit failures based on observations and experiment history."""
+    if not mobile_cloud_api or not mobile_cloud_api.is_gemini_available():
+        raise HTTPException(status_code=503, detail="Gemini AI not available. Configure GEMINI_API_KEY")
+
+    try:
+        from fastapi.responses import StreamingResponse
+
+        def generate():
+            for chunk in mobile_cloud_api.diagnose_circuit_failure(request.observation, request.experiment_history):
+                yield chunk
+
+        return StreamingResponse(generate(), media_type="text/plain")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/mobile/ai/test-script")
+async def mobile_generate_test_script(request: TestScriptRequest):
+    """Feature D: Lab Automation Scripting - Generate production-ready test automation scripts."""
+    if not mobile_cloud_api or not mobile_cloud_api.is_gemini_available():
+        raise HTTPException(status_code=503, detail="Gemini AI not available. Configure GEMINI_API_KEY")
+
+    try:
+        from fastapi.responses import StreamingResponse
+
+        def generate():
+            for chunk in mobile_cloud_api.generate_test_script(request.requirement, request.language):
+                yield chunk
+
+        return StreamingResponse(generate(), media_type="text/plain")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/mobile/ai/chat")
+async def mobile_gemini_chat(request: ChatRequest):
+    """General Chat Interface - Handle general conversations with Gemini."""
+    if not mobile_cloud_api or not mobile_cloud_api.is_gemini_available():
+        raise HTTPException(status_code=503, detail="Gemini AI not available. Configure GEMINI_API_KEY")
+
+    try:
+        from fastapi.responses import StreamingResponse
+
+        def generate():
+            for chunk in mobile_cloud_api.chat(request.message, request.conversation_history):
+                yield chunk
+
+        return StreamingResponse(generate(), media_type="text/plain")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

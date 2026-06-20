@@ -1,28 +1,51 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Alert, SafeAreaView } from 'react-native';
 import { useTheme, Switch } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeStore } from '../../store/themeStore';
 import { useAppStore } from '../../store';
+import { useSettingsStore } from '../../store/settingsStore';
 import Card from '../../components/common/Card';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '../../services/api';
 import { cloudClient, CloudConfig } from '../../services/cloud/cloudClient';
+import { syncService } from '../../services/sync/syncService';
+import { pinService } from '../../services/pinService';
 
 export default function SettingsScreen({ navigation }: any) {
   const theme = useTheme();
   const { isDark, toggleTheme } = useThemeStore();
   const { isOnline, lastSync } = useAppStore();
-  const [autoSync, setAutoSync] = React.useState(true);
-  const [notifications, setNotifications] = React.useState(true);
   
-  // Connection settings
-  const [apiBaseUrl, setApiBaseUrl] = React.useState('http://192.168.100.5:8000');
+  // Use settings store
+  const {
+    autoSync,
+    syncInterval,
+    pushNotifications,
+    emailNotifications,
+    userName,
+    themeColor,
+    apiBaseUrl,
+    setAutoSync,
+    setSyncInterval,
+    setPushNotifications,
+    setEmailNotifications,
+    setUserName,
+    setThemeColor,
+    setApiBaseUrl,
+  } = useSettingsStore();
+  
+  // Local UI state
   const [showApiInput, setShowApiInput] = React.useState(false);
+  const [showCloudConfig, setShowCloudConfig] = React.useState(false);
+  const [showThemeColorPicker, setShowThemeColorPicker] = React.useState(false);
+  const [showSyncIntervalPicker, setShowSyncIntervalPicker] = React.useState(false);
+  const [showProfile, setShowProfile] = React.useState(false);
+  const [hasPin, setHasPin] = React.useState(false);
+  const [pinEnabled, setPinEnabled] = React.useState(false);
   
   // Cloud settings
   const [cloudEnabled, setCloudEnabled] = React.useState(false);
-  const [showCloudConfig, setShowCloudConfig] = React.useState(false);
   const [cloudConfig, setCloudConfig] = React.useState<Partial<CloudConfig>>({
     account1Endpoint: 'https://s3.eu-central-003.backblazeb2.com',
     account1KeyId: '',
@@ -35,18 +58,6 @@ export default function SettingsScreen({ navigation }: any) {
     encryptionKey: '',
     enableEncryption: true,
   });
-  
-  // Appearance settings
-  const [themeColor, setThemeColor] = React.useState('Orange');
-  const [showThemeColorPicker, setShowThemeColorPicker] = React.useState(false);
-  
-  // Sync settings
-  const [syncInterval, setSyncInterval] = React.useState(5);
-  const [showSyncIntervalPicker, setShowSyncIntervalPicker] = React.useState(false);
-  
-  // Account settings
-  const [userName, setUserName] = React.useState('Dr. Smith');
-  const [showProfile, setShowProfile] = React.useState(false);
 
   const saveApiUrl = async (url: string) => {
     try {
@@ -118,12 +129,147 @@ export default function SettingsScreen({ navigation }: any) {
 
   const loadSettings = async () => {
     try {
-      const savedApiUrl = await AsyncStorage.getItem('@api_base_url');
-      if (savedApiUrl) {
-        setApiBaseUrl(savedApiUrl);
+      // Load cloud enabled status
+      const cloudStatus = await AsyncStorage.getItem('@cloud_enabled');
+      if (cloudStatus) {
+        setCloudEnabled(cloudStatus === 'true');
       }
+      
+      // Load PIN status
+      const pinExists = await pinService.hasPin();
+      setHasPin(pinExists);
+      const pinStatus = await pinService.isPinEnabled();
+      setPinEnabled(pinStatus);
     } catch (error) {
       console.error('Failed to load settings:', error);
+    }
+  };
+
+  const handleLogout = async () => {
+    Alert.alert(
+      'Log Out',
+      'Are you sure you want to log out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Log Out',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Clear auth token and sensitive data
+              await AsyncStorage.multiRemove(['auth_token', '@user_data']);
+              // Reset settings to defaults
+              useSettingsStore.getState().resetSettings();
+              Alert.alert('Logged Out', 'You have been logged out successfully');
+            } catch (error) {
+              Alert.alert('Error', 'Failed to log out');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleManualSync = async () => {
+    try {
+      const result = await syncService.syncNow();
+      if (result.success) {
+        Alert.alert('Sync Complete', result.message);
+        // Update last sync time in app store
+        useAppStore.getState().setLastSync(Date.now());
+      } else {
+        Alert.alert('Sync Failed', result.message);
+      }
+    } catch (error) {
+      Alert.alert('Sync Error', 'An error occurred during sync');
+    }
+  };
+
+  const handleAutoSyncToggle = async (value: boolean) => {
+    setAutoSync(value);
+    try {
+      await syncService.toggleSync(value);
+      // Convert minutes to milliseconds for syncService
+      const intervalMs = syncInterval * 60 * 1000;
+      await syncService.updateSyncInterval(intervalMs);
+    } catch (error) {
+      console.error('Error toggling auto-sync:', error);
+    }
+  };
+
+  const handleSyncIntervalChange = async (value: number) => {
+    setSyncInterval(value);
+    try {
+      // Convert minutes to milliseconds for syncService
+      const intervalMs = value * 60 * 1000;
+      await syncService.updateSyncInterval(intervalMs);
+    } catch (error) {
+      console.error('Error updating sync interval:', error);
+    }
+  };
+
+  const handleSetPin = () => {
+    navigation.navigate('PINSetup', { mode: 'set' });
+  };
+
+  const handleChangePin = () => {
+    navigation.navigate('PINSetup', { mode: 'change' });
+  };
+
+  const handleRemovePin = () => {
+    Alert.alert(
+      'Remove PIN',
+      'Are you sure you want to remove your PIN? This will reduce the security of your app.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await pinService.removePin();
+            if (result.success) {
+              setHasPin(false);
+              setPinEnabled(false);
+              Alert.alert('Success', 'PIN removed successfully');
+            } else {
+              Alert.alert('Error', result.message);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleResetPinState = () => {
+    Alert.alert(
+      'Reset PIN State',
+      'This will clear all PIN-related data and reset the PIN system. Use this if you are experiencing PIN-related issues.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await pinService.clearPinState();
+            if (result.success) {
+              setHasPin(false);
+              setPinEnabled(false);
+              Alert.alert('Success', 'PIN state reset successfully');
+            } else {
+              Alert.alert('Error', result.message);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleTogglePinEnabled = async (value: boolean) => {
+    const result = await pinService.togglePinEnabled(value);
+    if (result.success) {
+      setPinEnabled(value);
+    } else {
+      Alert.alert('Error', result.message);
     }
   };
 
@@ -140,6 +286,52 @@ export default function SettingsScreen({ navigation }: any) {
   };
 
   const settingsSections = [
+    {
+      title: 'Security',
+      items: [
+        {
+          icon: 'lock-closed',
+          label: 'PIN Lock',
+          type: 'switch',
+          value: pinEnabled,
+          onValueChange: handleTogglePinEnabled,
+          disabled: !hasPin,
+        },
+        ...(hasPin ? [
+          {
+            icon: 'key',
+            label: 'Change PIN',
+            type: 'navigation',
+            onPress: handleChangePin,
+          },
+          {
+            icon: 'trash',
+            label: 'Remove PIN',
+            type: 'navigation',
+            onPress: handleRemovePin,
+          },
+          {
+            icon: 'refresh',
+            label: 'Reset PIN State',
+            type: 'navigation',
+            onPress: handleResetPinState,
+          },
+        ] : [
+          {
+            icon: 'add-circle',
+            label: 'Set PIN',
+            type: 'navigation',
+            onPress: handleSetPin,
+          },
+          {
+            icon: 'refresh',
+            label: 'Reset PIN State',
+            type: 'navigation',
+            onPress: handleResetPinState,
+          },
+        ]),
+      ],
+    },
     {
       title: 'Appearance',
       items: [
@@ -167,7 +359,7 @@ export default function SettingsScreen({ navigation }: any) {
           label: 'Auto-sync',
           type: 'switch',
           value: autoSync,
-          onValueChange: setAutoSync,
+          onValueChange: handleAutoSyncToggle,
         },
         {
           icon: 'time',
@@ -180,7 +372,7 @@ export default function SettingsScreen({ navigation }: any) {
           icon: 'cloud-upload',
           label: 'Sync Now',
           type: 'button',
-          onPress: () => console.log('Sync now'),
+          onPress: () => handleManualSync(),
         },
       ],
     },
@@ -191,15 +383,15 @@ export default function SettingsScreen({ navigation }: any) {
           icon: 'notifications',
           label: 'Push Notifications',
           type: 'switch',
-          value: notifications,
-          onValueChange: setNotifications,
+          value: pushNotifications,
+          onValueChange: setPushNotifications,
         },
         {
           icon: 'mail',
           label: 'Email Notifications',
           type: 'switch',
-          value: false,
-          onValueChange: () => {},
+          value: emailNotifications,
+          onValueChange: setEmailNotifications,
         },
       ],
     },
@@ -214,16 +406,10 @@ export default function SettingsScreen({ navigation }: any) {
           onPress: () => setShowProfile(true),
         },
         {
-          icon: 'key',
-          label: 'Change Password',
-          type: 'navigation',
-          onPress: () => Alert.alert('Change Password', 'Password change functionality coming soon'),
-        },
-        {
           icon: 'shield-checkmark',
           label: 'Privacy',
           type: 'navigation',
-          onPress: () => Alert.alert('Privacy', 'Privacy settings coming soon'),
+          onPress: () => navigation.navigate('Privacy'),
         },
       ],
     },
@@ -240,13 +426,13 @@ export default function SettingsScreen({ navigation }: any) {
           icon: 'document-text',
           label: 'Terms of Service',
           type: 'navigation',
-          onPress: () => Alert.alert('Terms of Service', 'Terms of Service coming soon'),
+          onPress: () => navigation.navigate('Terms'),
         },
         {
           icon: 'help-circle',
           label: 'Help & Support',
           type: 'navigation',
-          onPress: () => Alert.alert('Help & Support', 'Help documentation coming soon'),
+          onPress: () => navigation.navigate('Help'),
         },
       ],
     },
@@ -318,15 +504,18 @@ export default function SettingsScreen({ navigation }: any) {
   };
 
   return (
-    <>
-      <ScrollView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={[styles.title, { color: theme.colors.onBackground }]}>
-            Settings
-          </Text>
-        </View>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      {/* Fixed Header */}
+      <View style={styles.header}>
+        <Text style={[styles.title, { color: theme.colors.onBackground }]}>
+          Settings
+        </Text>
+      </View>
 
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        style={styles.scrollContent}
+      >
         {/* Sync Status */}
         <Card elevation={0} style={styles.syncCard}>
           <View style={styles.syncStatusRow}>
@@ -339,9 +528,9 @@ export default function SettingsScreen({ navigation }: any) {
                 Last sync: {lastSync || 'Never'}
               </Text>
             </View>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.syncButton, { backgroundColor: theme.colors.primary }]}
-              onPress={() => console.log('Sync now')}
+              onPress={() => Alert.alert('Sync', 'Manual sync initiated')}
             >
               <Ionicons name="sync" size={20} color="white" />
             </TouchableOpacity>
@@ -363,9 +552,9 @@ export default function SettingsScreen({ navigation }: any) {
         ))}
 
         {/* Logout */}
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.logoutButton, { backgroundColor: theme.colors.error }]}
-          onPress={() => console.log('Log out')}
+          onPress={() => handleLogout()}
         >
           <Ionicons name="log-out" size={20} color="white" />
           <Text style={styles.logoutButtonText}>Log Out</Text>
@@ -408,26 +597,6 @@ export default function SettingsScreen({ navigation }: any) {
                 <Text style={styles.modalButtonText}>Save</Text>
               </TouchableOpacity>
             </View>
-          </View>
-        </View>
-      )}
-
-      {/* Cloud Config Modal */}
-      {showCloudConfig && (
-        <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: theme.colors.onSurface }]}>
-              Configure Backblaze B2
-            </Text>
-            <Text style={[styles.modalDescription, { color: theme.colors.onSurfaceVariant }]}>
-              Enter your Backblaze B2 credentials to enable cloud sync.
-            </Text>
-            <TouchableOpacity
-              style={[styles.modalButton, styles.modalButtonSave, { backgroundColor: theme.colors.primary }]}
-              onPress={() => setShowCloudConfig(false)}
-            >
-              <Text style={styles.modalButtonText}>Close</Text>
-            </TouchableOpacity>
           </View>
         </View>
       )}
@@ -484,7 +653,7 @@ export default function SettingsScreen({ navigation }: any) {
                   syncInterval === interval && { backgroundColor: theme.colors.primaryContainer }
                 ]}
                 onPress={() => {
-                  setSyncInterval(interval);
+                  handleSyncIntervalChange(interval);
                   setShowSyncIntervalPicker(false);
                 }}
               >
@@ -540,7 +709,11 @@ export default function SettingsScreen({ navigation }: any) {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalButtonSave, { backgroundColor: theme.colors.primary }]}
-                onPress={() => setShowProfile(false)}
+                onPress={() => {
+                  // Save userName to settings store
+                  setUserName(userName);
+                  setShowProfile(false);
+                }}
               >
                 <Text style={styles.modalButtonText}>Save</Text>
               </TouchableOpacity>
@@ -681,7 +854,7 @@ export default function SettingsScreen({ navigation }: any) {
           </View>
         </View>
       )}
-    </>
+    </SafeAreaView>
   );
 }
 
@@ -692,6 +865,9 @@ const styles = StyleSheet.create({
   header: {
     padding: 16,
     paddingTop: 20,
+  },
+  scrollContent: {
+    flex: 1,
   },
   title: {
     fontSize: 28,

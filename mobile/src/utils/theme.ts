@@ -12,14 +12,33 @@ declare module 'react-native-paper' {
   };
 }
 
+const colorPalette: Record<string, { primary: string; primaryDark: string }> = {
+  'Orange': { primary: '#ff6b35', primaryDark: '#e55a2b' },
+  'Blue': { primary: '#2196F3', primaryDark: '#1976D2' },
+  'Green': { primary: '#4CAF50', primaryDark: '#388E3C' },
+  'Purple': { primary: '#9C27B0', primaryDark: '#7B1FA2' },
+  'Red': { primary: '#F44336', primaryDark: '#D32F2F' },
+  'Teal': { primary: '#009688', primaryDark: '#00796B' },
+};
+
+const defaultColor = colorPalette['Orange'];
+
 const customColors = {
-  primary: '#ff6b35',
-  primaryDark: '#e55a2b',
+  primary: defaultColor.primary,
+  primaryDark: defaultColor.primaryDark,
   secondary: '#4ade80',
   error: '#f87171',
   warning: '#fbbf24',
   info: '#60a5fa',
   success: '#4ade80',
+};
+
+export const getThemeColors = (colorName: string = 'Orange') => {
+  const selectedColor = colorPalette[colorName] || defaultColor;
+  return {
+    primary: selectedColor.primary,
+    primaryDark: selectedColor.primaryDark,
+  };
 };
 
 const { LightTheme, DarkTheme } = adaptNavigationTheme({

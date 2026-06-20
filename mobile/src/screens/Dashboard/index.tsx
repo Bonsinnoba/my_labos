@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '../../store';
@@ -26,112 +26,109 @@ export default function DashboardScreen({ navigation }: any) {
   ];
 
   const quickActions = [
-    { id: 1, title: 'New Experiment', icon: 'flask', color: theme.colors.primary },
-    { id: 2, title: 'Add Note', icon: 'create', color: theme.colors.info },
-    { id: 3, title: 'Search', icon: 'search', color: theme.colors.warning },
-    { id: 4, title: 'Sync Now', icon: 'sync', color: theme.colors.success },
+    { id: 1, title: 'Add Note', icon: 'create', color: theme.colors.info },
+    { id: 2, title: 'Search', icon: 'search', color: theme.colors.warning },
   ];
 
   return (
-    <ScrollView 
-      style={[styles.container, { backgroundColor: theme.colors.background }]}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* Header */}
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      {/* Fixed Header */}
       <View style={styles.header}>
-        <View>
-          <Text style={[styles.greeting, { color: theme.colors.onSurfaceVariant }]}>
-            Welcome back
-          </Text>
-          <Text style={[styles.title, { color: theme.colors.onBackground }]}>
-            Dashboard
-          </Text>
-        </View>
-        <View style={[styles.syncStatus, { backgroundColor: isOnline ? theme.colors.success : theme.colors.error }]}>
-          <Ionicons 
-            name={isOnline ? 'wifi' : 'wifi-outline'} 
-            size={16} 
-            color="white" 
+        <Text style={[styles.title, { color: theme.colors.onBackground }]}>
+          Dashboard
+        </Text>
+        <View style={styles.syncStatus}>
+          <Ionicons
+            name={isOnline ? 'wifi' : 'wifi-outline'}
+            size={20}
+            color={isOnline ? '#4CAF50' : '#FF9800'}
             style={styles.syncIcon}
           />
-          <Text style={styles.syncStatusText}>
+          <Text style={[styles.syncStatusText, { color: isOnline ? '#4CAF50' : '#FF9800' }]}>
             {isOnline ? 'Online' : 'Offline'}
           </Text>
         </View>
       </View>
 
-      {/* Quick Stats */}
-      <View style={styles.statsGrid}>
-        {quickStats.map((stat, index) => (
-          <Card key={index} style={styles.statCard} elevation={0}>
-            <View style={styles.statContent}>
-              <View style={[styles.statIcon, { backgroundColor: `${stat.color}20` }]}>
-                <Ionicons name={stat.icon as any} size={24} color={stat.color} />
-              </View>
-              <Text style={[styles.statValue, { color: theme.colors.onSurface }]}>
-                {stat.value}
-              </Text>
-              <Text style={[styles.statLabel, { color: theme.colors.onSurfaceVariant }]}>
-                {stat.label}
-              </Text>
-            </View>
-          </Card>
-        ))}
-      </View>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        style={styles.scrollContent}
+      >
+        {/* Welcome Greeting */}
+        <View style={styles.greetingContainer}>
+          <Text style={[styles.greeting, { color: theme.colors.onSurfaceVariant }]}>
+            Welcome back
+          </Text>
+        </View>
 
-      {/* Quick Actions */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>
-          Quick Actions
-        </Text>
-        <View style={styles.actionsGrid}>
-          {quickActions.map((action) => (
-            <TouchableOpacity 
-              key={action.id} 
-              style={[styles.actionCard, { backgroundColor: theme.colors.surface }]}
-              onPress={() => {
-                if (action.title === 'New Experiment') {
-                  navigation.navigate('Experiments');
-                } else if (action.title === 'Add Note') {
-                  console.log('Add Note functionality');
-                } else if (action.title === 'Search') {
-                  console.log('Search functionality');
-                } else if (action.title === 'Sync Now') {
-                  console.log('Sync Now functionality');
-                }
-              }}
-            >
-              <View style={[styles.actionIcon, { backgroundColor: `${action.color}20` }]}>
-                <Ionicons name={action.icon as any} size={24} color={action.color} />
+        {/* Quick Stats */}
+        <View style={styles.statsGrid}>
+          {quickStats.map((stat, index) => (
+            <Card key={index} style={styles.statCard} elevation={0}>
+              <View style={styles.statContent}>
+                <View style={[styles.statIcon, { backgroundColor: `${stat.color}20` }]}>
+                  <Ionicons name={stat.icon as any} size={24} color={stat.color} />
+                </View>
+                <Text style={[styles.statValue, { color: theme.colors.onSurface }]}>
+                  {stat.value}
+                </Text>
+                <Text style={[styles.statLabel, { color: theme.colors.onSurfaceVariant }]}>
+                  {stat.label}
+                </Text>
               </View>
-              <Text style={[styles.actionTitle, { color: theme.colors.onSurface }]}>
-                {action.title}
-              </Text>
-            </TouchableOpacity>
+            </Card>
           ))}
         </View>
-      </View>
 
-      {/* Recent Projects */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
+        {/* Quick Actions */}
+        <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>
-            Recent Projects
+            Quick Actions
           </Text>
-          <TouchableOpacity onPress={() => navigation.navigate('Projects')}>
-            <Text style={[styles.seeAll, { color: theme.colors.primary }]}>
-              See All
-            </Text>
-          </TouchableOpacity>
+          <View style={styles.actionsGrid}>
+            {quickActions.map((action) => (
+              <TouchableOpacity
+                key={action.id}
+                style={[styles.actionCard, { backgroundColor: theme.colors.surface }]}
+                onPress={() => {
+                  if (action.title === 'Add Note') {
+                    navigation.navigate('Notebook');
+                  } else if (action.title === 'Search') {
+                    navigation.navigate('Search');
+                  }
+                }}
+              >
+                <View style={[styles.actionIcon, { backgroundColor: `${action.color}20` }]}>
+                  <Ionicons name={action.icon as any} size={24} color={action.color} />
+                </View>
+                <Text style={[styles.actionTitle, { color: theme.colors.onSurface }]}>
+                  {action.title}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
-          <ProjectCard
-            name="Circuit Analysis"
-            status="Active"
-            progress={75}
-            lastUpdated="2 hours ago"
-            onPress={() => navigation.navigate('ProjectDetail', { projectId: 1 })}
-          />
+
+        {/* Recent Projects */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>
+              Recent Projects
+            </Text>
+            <TouchableOpacity onPress={() => navigation.navigate('Projects')}>
+              <Text style={[styles.seeAll, { color: theme.colors.primary }]}>
+                See All
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
+            <ProjectCard
+              name="Circuit Analysis"
+              status="Active"
+              progress={75}
+              lastUpdated="2 hours ago"
+              onPress={() => navigation.navigate('ProjectDetail', { projectId: 1 })}
+            />
           <ProjectCard
             name="Sensor Calibration"
             status="Active"
@@ -210,6 +207,7 @@ export default function DashboardScreen({ navigation }: any) {
 
       <View style={styles.footer} />
     </ScrollView>
+    </SafeAreaView>
   );
 }
 
@@ -224,9 +222,16 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingTop: 20,
   },
+  scrollContent: {
+    flex: 1,
+  },
+  greetingContainer: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 16,
+  },
   greeting: {
     fontSize: 14,
-    marginBottom: 4,
   },
   title: {
     fontSize: 28,
@@ -235,16 +240,12 @@ const styles = StyleSheet.create({
   syncStatus: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
   },
   syncIcon: {
     marginRight: 4,
   },
   syncStatusText: {
-    color: 'white',
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: '600',
   },
   statsGrid: {

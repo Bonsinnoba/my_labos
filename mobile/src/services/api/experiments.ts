@@ -1,4 +1,5 @@
 import apiClient from './client';
+import { offlineCache } from '../cache/offlineCache';
 
 export interface Experiment {
   id: number;
@@ -37,31 +38,70 @@ export interface UpdateExperimentRequest {
 export const experimentsApi = {
   // Get all experiments
   getAll: async (): Promise<Experiment[]> => {
-    return apiClient.get<Experiment[]>('/api/experiments');
+    try {
+      const experiments = await apiClient.get<Experiment[]>('/api/experiments');
+      await offlineCache.set('experiments', experiments);
+      return experiments;
+    } catch (error) {
+      console.error('[experimentsApi] Cloud API failed, using cache:', error);
+      const cachedExperiments = await offlineCache.get<Experiment[]>('experiments');
+      if (cachedExperiments) {
+        console.log('[experimentsApi] Using cached experiments');
+        return cachedExperiments;
+      }
+      throw error;
+    }
   },
 
   // Get experiments by project ID
   getByProject: async (projectId: number): Promise<Experiment[]> => {
-    return apiClient.get<Experiment[]>(`/api/projects/${projectId}/experiments`);
+    try {
+      return await apiClient.get<Experiment[]>(`/api/projects/${projectId}/experiments`);
+    } catch (error) {
+      console.error('[experimentsApi] Cloud API failed for getByProject:', error);
+      const cachedExperiments = await offlineCache.get<Experiment[]>('experiments');
+      if (cachedExperiments) {
+        return cachedExperiments.filter(e => e.project_id === projectId);
+      }
+      throw error;
+    }
   },
 
   // Get experiment by ID
   getById: async (id: number): Promise<Experiment> => {
-    return apiClient.get<Experiment>(`/api/experiments/${id}`);
+    try {
+      return await apiClient.get<Experiment>(`/api/experiments/${id}`);
+    } catch (error) {
+      console.error('[experimentsApi] Cloud API failed for getById:', error);
+      const cachedExperiments = await offlineCache.get<Experiment[]>('experiments');
+      if (cachedExperiments) {
+        const experiment = cachedExperiments.find(e => e.id === id);
+        if (experiment) {
+          console.log('[experimentsApi] Using cached experiment');
+          return experiment;
+        }
+      }
+      throw error;
+    }
   },
 
   // Create new experiment
   create: async (data: CreateExperimentRequest): Promise<Experiment> => {
-    return apiClient.post<Experiment>('/api/experiments', data);
+    const experiment = await apiClient.post<Experiment>('/api/experiments', data);
+    await offlineCache.remove('experiments');
+    return experiment;
   },
 
   // Update experiment
   update: async (id: number, data: UpdateExperimentRequest): Promise<Experiment> => {
-    return apiClient.put<Experiment>(`/api/experiments/${id}`, data);
+    const experiment = await apiClient.put<Experiment>(`/api/experiments/${id}`, data);
+    await offlineCache.remove('experiments');
+    return experiment;
   },
 
   // Delete experiment
   delete: async (id: number): Promise<void> => {
-    return apiClient.delete<void>(`/api/experiments/${id}`);
+    await apiClient.delete<void>(`/api/experiments/${id}`);
+    await offlineCache.remove('experiments');
   },
 };

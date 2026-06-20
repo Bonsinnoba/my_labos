@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator, SafeAreaView } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
-import SearchBar from '../../components/common/SearchBar';
+import AdvancedSearchBar from '../../components/common/AdvancedSearchBar';
 import StatusBadge from '../../components/common/StatusBadge';
 import ProjectCard from '../../components/lists/ProjectCard';
 import { projectsApi, Project } from '../../services/api';
@@ -42,13 +42,13 @@ export default function ProjectsScreen({ navigation }: any) {
   });
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      {/* Header */}
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      {/* Fixed Header */}
       <View style={styles.header}>
         <Text style={[styles.title, { color: theme.colors.onBackground }]}>
           Projects
         </Text>
-        <TouchableOpacity 
+        <TouchableOpacity
           style={[styles.addButton, { backgroundColor: theme.colors.primary }]}
           onPress={() => console.log('Add new project')}
         >
@@ -56,37 +56,43 @@ export default function ProjectsScreen({ navigation }: any) {
         </TouchableOpacity>
       </View>
 
-      {/* Search */}
-      <SearchBar
-        placeholder="Search projects..."
-        onSearch={setSearchQuery}
-      />
-
-      {/* Status Filters */}
-      <ScrollView 
-        horizontal 
-        showsHorizontalScrollIndicator={false}
-        style={styles.filtersScroll}
-        contentContainerStyle={styles.filtersContent}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        style={styles.scrollContent}
       >
-        {statusFilters.map((status) => (
-          <TouchableOpacity
-            key={status}
-            style={[
-              styles.filterChip,
-              {
-                backgroundColor: filterStatus === status ? theme.colors.primary : theme.colors.surface,
-                borderColor: filterStatus === status ? theme.colors.primary : theme.colors.border,
-              },
-            ]}
-            onPress={() => setFilterStatus(status)}
-          >
-            <Text
+        {/* Search */}
+        <AdvancedSearchBar
+          placeholder="Search projects..."
+          onSearch={setSearchQuery}
+          showFilters={false}
+          debounceMs={300}
+        />
+
+        {/* Status Filters */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.filtersScroll}
+          contentContainerStyle={styles.filtersContent}
+        >
+          {statusFilters.map((status) => (
+            <TouchableOpacity
+              key={status}
               style={[
-                styles.filterText,
-                { color: filterStatus === status ? 'white' : theme.colors.onSurface },
+                styles.filterChip,
+                {
+                  backgroundColor: filterStatus === status ? theme.colors.primary : theme.colors.surface,
+                  borderColor: filterStatus === status ? theme.colors.primary : theme.colors.border,
+                },
               ]}
+              onPress={() => setFilterStatus(status)}
             >
+              <Text
+                style={[
+                  styles.filterText,
+                  { color: filterStatus === status ? 'white' : theme.colors.onSurface },
+                ]}
+              >
               {status}
             </Text>
           </TouchableOpacity>
@@ -94,7 +100,7 @@ export default function ProjectsScreen({ navigation }: any) {
       </ScrollView>
 
       {/* Projects List */}
-      <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
+      <View style={styles.list}>
         {loading ? (
           <View style={styles.loadingState}>
             <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -137,8 +143,9 @@ export default function ProjectsScreen({ navigation }: any) {
             </Text>
           </View>
         )}
+      </View>
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -152,6 +159,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     paddingTop: 20,
+  },
+  scrollContent: {
+    flex: 1,
   },
   title: {
     fontSize: 28,
