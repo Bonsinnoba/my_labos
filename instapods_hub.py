@@ -16,6 +16,8 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+from dotenv import load_dotenv
+load_dotenv()
 
 # Add lab_app to path
 sys.path.insert(0, str(Path(__file__).parent / "lab_app"))
