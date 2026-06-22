@@ -29,6 +29,13 @@ except ImportError:
     BOTO3_AVAILABLE = False
     print("[mesh_sync] boto3 not available - cloud sync will be disabled")
 
+try:
+    from supabase import create_client, Client
+    SUPABASE_AVAILABLE = True
+except ImportError:
+    SUPABASE_AVAILABLE = False
+    print("[mesh_sync] supabase not available - Supabase mirroring will be disabled")
+
 
 class MeshSyncCoordinator:
     """
@@ -78,6 +85,18 @@ class MeshSyncCoordinator:
         # Registered device IDs for garbage collection
         self.registered_devices = set()
         
+        # Supabase client for mirroring (initialized once at class level)
+        self.supabase_client: Optional[Client] = None
+        self.supabase_url = os.getenv("SUPABASE_URL", "")
+        self.supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY", "")
+        
+        # Mobile sync tracking
+        self.mobile_pull_timestamp_file = Path(".mesh_mobile_pull_timestamp")
+        self.last_mobile_pull_timestamp = self._load_mobile_pull_timestamp()
+        
+        # Supabase keep-alive tracking (prevent free tier pausing)
+        self.last_supabase_ping_timestamp = self._load_supabase_ping_timestamp()
+        
         # Initialize database connection
         self._init_db_connection()
         
@@ -86,6 +105,12 @@ class MeshSyncCoordinator:
             self._init_b2_client()
         else:
             print("[mesh_sync] B2 credentials not provided or boto3 unavailable - cloud sync disabled")
+        
+        # Initialize Supabase client if credentials provided
+        if SUPABASE_AVAILABLE and self.supabase_url and self.supabase_service_key:
+            self._init_supabase_client()
+        else:
+            print("[mesh_sync] Supabase credentials not provided or supabase not available - mirroring disabled")
     
     def _get_or_generate_device_id(self) -> str:
         """
@@ -132,6 +157,226 @@ class MeshSyncCoordinator:
         except Exception as e:
             print(f"[mesh_sync] B2 client initialization error: {e}")
             self.s3_client = None
+    
+    def _init_supabase_client(self) -> None:
+        """Initialize Supabase client for mirroring."""
+        try:
+            self.supabase_client = create_client(
+                self.supabase_url,
+                self.supabase_service_key
+            )
+            print("[mesh_sync] Supabase client initialized for mirroring")
+        except Exception as e:
+            print(f"[mesh_sync] Supabase client initialization error: {e}")
+            self.supabase_client = None
+    
+    def _load_mobile_pull_timestamp(self) -> int:
+        """
+        Load the last mobile pull timestamp from local file.
+        
+        Returns:
+            Timestamp in milliseconds, or 0 if file doesn't exist
+        """
+        if self.mobile_pull_timestamp_file.exists():
+            try:
+                with open(self.mobile_pull_timestamp_file, 'r') as f:
+                    return int(f.read().strip())
+            except Exception as e:
+                print(f"[mesh_sync] Error loading mobile pull timestamp: {e}")
+        return 0
+    
+    def _save_mobile_pull_timestamp(self, timestamp: int) -> None:
+        """
+        Save the last mobile pull timestamp to local file.
+        
+        Args:
+            timestamp: Timestamp in milliseconds
+        """
+        try:
+            with open(self.mobile_pull_timestamp_file, 'w') as f:
+                f.write(str(timestamp))
+        except Exception as e:
+            print(f"[mesh_sync] Error saving mobile pull timestamp: {e}")
+    
+    def _load_supabase_ping_timestamp(self) -> int:
+        """
+        Load the last Supabase ping timestamp from local file.
+        
+        Returns:
+            Timestamp in milliseconds, or 0 if file doesn't exist
+        """
+        ping_file = Path(".mesh_supabase_ping_timestamp")
+        if ping_file.exists():
+            try:
+                with open(ping_file, 'r') as f:
+                    return int(f.read().strip())
+            except Exception as e:
+                print(f"[mesh_sync] Error loading Supabase ping timestamp: {e}")
+        return 0
+    
+    def _save_supabase_ping_timestamp(self, timestamp: int) -> None:
+        """
+        Save the last Supabase ping timestamp to local file.
+        
+        Args:
+            timestamp: Timestamp in milliseconds
+        """
+        try:
+            ping_file = Path(".mesh_supabase_ping_timestamp")
+            with open(ping_file, 'w') as f:
+                f.write(str(timestamp))
+        except Exception as e:
+            print(f"[mesh_sync] Error saving Supabase ping timestamp: {e}")
+    
+    def _keep_supabase_alive(self) -> None:
+        """
+        Keep Supabase connection alive to prevent free tier pausing.
+        
+        Executes a lightweight query every 3 days (259,200 seconds) to prevent
+        Supabase from pausing the project due to inactivity.
+        
+        This is non-fatal and should not affect the sync loop if it fails.
+        """
+        if not self.supabase_client or not self.check_network_status():
+            return
+        
+        current_timestamp = int(time.time() * 1000)
+        three_days_ms = 259200 * 1000  # 3 days in milliseconds
+        
+        # Check if more than 3 days have passed since last ping
+        if self.last_supabase_ping_timestamp > 0:
+            time_since_last_ping = current_timestamp - self.last_supabase_ping_timestamp
+            if time_since_last_ping < three_days_ms:
+                # Not due yet, skip
+                return
+        
+        try:
+            # Execute lightweight query to keep connection alive
+            response = self.supabase_client.table('equipment').select('id').limit(1).execute()
+            
+            # Update last ping timestamp on success
+            self._save_supabase_ping_timestamp(current_timestamp)
+            self.last_supabase_ping_timestamp = current_timestamp
+            
+            print(f"[mesh_sync] Supabase keep-alive ping successful at {datetime.fromtimestamp(current_timestamp / 1000).isoformat()}")
+        
+        except Exception as e:
+            print(f"[mesh_sync] Warning: Supabase keep-alive ping failed (non-fatal): {e}")
+    
+    def _mirror_to_supabase(self, transactions: List[Dict[str, Any]]) -> None:
+        """
+        Mirror transactions to Supabase (non-fatal, best-effort).
+        
+        Args:
+            transactions: List of transaction dictionaries to mirror
+        """
+        if not self.supabase_client or not self.check_network_status():
+            return
+        
+        try:
+            for tx in transactions:
+                table_name = tx['table_name']
+                operation = tx['operation']
+                payload = tx['payload'].copy()
+                
+                # Remove internal tracking fields
+                payload.pop('_record_id', None)
+                
+                if operation in ('INSERT', 'UPDATE'):
+                    # Upsert to Supabase
+                    try:
+                        self.supabase_client.table(table_name).upsert(payload).execute()
+                        print(f"[mesh_sync] Mirrored {operation} to Supabase: {table_name}")
+                    except Exception as e:
+                        print(f"[mesh_sync] Warning: Failed to mirror {operation} to {table_name}: {e}")
+                
+                elif operation == 'DELETE':
+                    record_id = tx['payload'].get('_record_id')
+                    if record_id is None:
+                        print(f"[mesh_sync] Warning: DELETE operation missing _record_id, skipping Supabase mirror")
+                        continue
+                    
+                    try:
+                        # Check if table has is_tombstone column for soft delete
+                        # For Supabase, we always use soft delete via is_tombstone
+                        self.supabase_client.table(table_name).update({'is_tombstone': 1}).eq('id', record_id).execute()
+                        print(f"[mesh_sync] Mirrored soft DELETE to Supabase: {table_name} id={record_id}")
+                    except Exception as e:
+                        print(f"[mesh_sync] Warning: Failed to mirror DELETE to {table_name}: {e}")
+        
+        except Exception as e:
+            print(f"[mesh_sync] Warning: Supabase mirroring error (non-fatal): {e}")
+    
+    def _pull_mobile_notes(self) -> int:
+        """
+        Pull mobile notes from Supabase and inject them into the mesh (non-fatal, best-effort).
+        
+        Returns:
+            Number of mobile notes pulled
+        """
+        if not self.supabase_client or not self.check_network_status():
+            return 0
+        
+        try:
+            # Query Supabase for mobile notes updated since last pull
+            # Convert milliseconds to ISO timestamp for Supabase query
+            last_pull_iso = datetime.fromtimestamp(self.last_mobile_pull_timestamp / 1000).isoformat() if self.last_mobile_pull_timestamp > 0 else None
+            
+            query = self.supabase_client.table('notebook_entries').select('*').eq('source', 'mobile')
+            
+            if last_pull_iso:
+                query = query.gt('updated_at', last_pull_iso)
+            
+            response = query.execute()
+            
+            if not response.data:
+                return 0
+            
+            pulled_count = 0
+            current_timestamp = int(time.time() * 1000)
+            
+            for note in response.data:
+                try:
+                    # Convert note to mesh transaction format
+                    # Remove Supabase-specific fields
+                    note_payload = {k: v for k, v in note.items() 
+                                   if k not in ['id', 'created_at', 'updated_at', 'source']}
+                    
+                    # Log as INSERT mutation with device_origin='MOBILE'
+                    # We use a special device_origin to indicate mobile source
+                    tx_id = self.log_mutation(
+                        table_name='notebook_entries',
+                        operation='INSERT',
+                        payload=note_payload,
+                        record_id=None  # Supabase uses UUID, SQLite uses auto-increment
+                    )
+                    
+                    # Update the transaction to mark it as from mobile
+                    cursor = self.conn.cursor()
+                    cursor.execute("""
+                        UPDATE mesh_transactions
+                        SET device_origin = 'MOBILE'
+                        WHERE tx_id = ?
+                    """, (tx_id,))
+                    self.conn.commit()
+                    
+                    pulled_count += 1
+                    print(f"[mesh_sync] Pulled mobile note: {note.get('title', 'untitled')}")
+                
+                except Exception as e:
+                    print(f"[mesh_sync] Warning: Failed to process mobile note: {e}")
+                    continue
+            
+            # Update last pull timestamp
+            if pulled_count > 0:
+                self._save_mobile_pull_timestamp(current_timestamp)
+                print(f"[mesh_sync] Pulled {pulled_count} mobile notes from Supabase")
+            
+            return pulled_count
+        
+        except Exception as e:
+            print(f"[mesh_sync] Warning: Mobile note pull error (non-fatal): {e}")
+            return 0
     
     def log_mutation(self, 
                     table_name: str,
@@ -284,6 +529,11 @@ class MeshSyncCoordinator:
                     print(f"[mesh_sync] Applied transaction: {tx['operation']} on {tx['table_name']} from {tx['device_origin']}")
             
             print(f"[mesh_sync] Applied {applied_count} incoming transactions")
+            
+            # Mirror to Supabase (non-fatal, best-effort)
+            if applied_count > 0:
+                self._mirror_to_supabase(sorted_transactions)
+            
             return applied_count
             
         except sqlite3.Error as e:
@@ -543,9 +793,16 @@ class MeshSyncCoordinator:
                 # Check network status
                 self.check_network_status()
                 
+                # Keep Supabase alive (prevent free tier pausing)
+                # Called every iteration but only executes every 3 days
+                self._keep_supabase_alive()
+                
                 if self.is_online:
                     # Pull from cloud first
                     self.pull_from_cloud()
+                    
+                    # Pull mobile notes from Supabase
+                    self._pull_mobile_notes()
                     
                     # Then push to cloud
                     self.push_to_cloud()

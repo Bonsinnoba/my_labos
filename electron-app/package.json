@@ -1,0 +1,59 @@
+{
+  "name": "lab-rd-desktop",
+  "version": "1.0.0",
+  "description": "Lab R&D Operating System - Desktop App",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build-python": "python build_python.py",
+    "build": "electron-builder",
+    "dist": "electron-builder --publish=never"
+  },
+  "keywords": [
+    "lab",
+    "rd",
+    "electron"
+  ],
+  "author": "Lab R&D",
+  "license": "Proprietary",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0",
+    "node-fetch": "^3.3.2"
+  },
+  "build": {
+    "appId": "com.labrd.desktop",
+    "productName": "Lab R&D",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "python-dist/**/*",
+      "resources/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "python-dist/",
+        "to": "python-dist/"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "resources/icon.icns"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "resources/icon.png"
+    }
+  }
+}

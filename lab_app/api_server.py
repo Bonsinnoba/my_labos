@@ -795,23 +795,26 @@ async def view_document(doc_id: int):
             raise HTTPException(status_code=404, detail="Document not found")
         
         file_path = doc.get('file_path')
-        print(f"Viewing document: doc_id={doc_id}, file_path={file_path}, exists={os.path.exists(file_path)}")
+        # Convert to absolute path
+        abs_file_path = os.path.abspath(file_path) if file_path else None
         
-        if not file_path or not os.path.exists(file_path):
+        print(f"Viewing document: doc_id={doc_id}, file_path={file_path}, abs_path={abs_file_path}, exists={os.path.exists(abs_file_path) if abs_file_path else False}")
+        
+        if not abs_file_path or not os.path.exists(abs_file_path):
             raise HTTPException(status_code=404, detail="File not found")
         
         # Detect MIME type based on file extension
         import mimetypes
-        mime_type, _ = mimetypes.guess_type(file_path)
+        mime_type, _ = mimetypes.guess_type(abs_file_path)
         if not mime_type:
             mime_type = 'application/octet-stream'
         
         print(f"Serving file with MIME type: {mime_type}")
         
         return FileResponse(
-            path=file_path,
+            path=abs_file_path,
             media_type=mime_type,
-            filename=os.path.basename(file_path)
+            filename=os.path.basename(abs_file_path)
         )
     except HTTPException:
         raise

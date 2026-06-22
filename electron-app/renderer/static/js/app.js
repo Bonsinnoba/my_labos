@@ -3,7 +3,9 @@ console.log('app.js loaded v19');
 async function apiFetch(url, options = {}) {
     const skipAlert = options.skipErrorAlert || false;
     try {
-        const response = await fetch(url, options);
+        // Use electronAPI.apiFetch if available (Electron context) to bypass CORS
+        const fetchFn = window.electronAPI && window.electronAPI.apiFetch ? window.electronAPI.apiFetch : fetch;
+        const response = await fetchFn(url, options);
         if (!response.ok) {
             let errorText = `HTTP Error ${response.status}: ${response.statusText}`;
             try {
@@ -545,7 +547,7 @@ function renderExperimentAttachments(attachmentsJson, experimentId, type) {
         return attachments.map(att => {
             const isImage = att.type === 'image';
             const isVideo = att.type === 'video';
-            const thumbHtml = isImage ? `<img src="/api/documents/${att.id}/view" class="attachment-thumb">` : '';
+            const thumbHtml = isImage ? `<img src="http://127.0.0.1:8000/api/documents/${att.id}/view" class="attachment-thumb">` : '';
             const icon = isVideo ? '🎬' : (att.type === 'note' ? '📓' : '📄');
             
             return `<span class="attachment-badge" title="${escapeHtml(String(att.title))}" onclick="event.stopPropagation(); viewAttachment(${att.id}, '${att.type}')">${thumbHtml}<span class="attachment-title">${icon} ${escapeHtml(String(att.title))}</span><button class="attachment-remove" onclick="event.stopPropagation(); removeExperimentAttachment(${experimentId}, '${type}', ${att.id})">✖</button></span>`;
@@ -630,7 +632,7 @@ async function uploadMediaToExperiment(experimentId, type) {
             formData.append('file', file);
             formData.append('title', file.name);
             
-            const response = await apiFetch('/api/documents', {
+            const response = await apiFetch('http://127.0.0.1:8000/api/documents', {
                 method: 'POST',
                 body: formData
             });
@@ -742,7 +744,7 @@ async function viewAttachment(id, type) {
         window.location.href = `#notebook`;
         // Could add logic to highlight the specific note
     } else {
-        window.open(`/api/documents/${id}/view`, '_blank');
+        window.open(`http://127.0.0.1:8000/api/documents/${id}/view`, '_blank');
     }
 }
 
@@ -1587,7 +1589,7 @@ async function loadStageDocuments(stageId) {
         list.innerHTML = documents.map(d => `
             <div class="content-item" style="display:flex; justify-content:space-between; align-items:center; border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; margin-bottom: 8px; background: var(--bg-secondary);">
                 <div style="flex: 1; min-width: 0; margin-right: 12px; text-align: left;">
-                    <a href="/api/documents/${d.id}/view" target="_blank" style="font-weight:600; color:var(--text-primary); text-decoration:none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">📄 ${d.title}</a>
+                    <a href="http://127.0.0.1:8000/api/documents/${d.id}/view" target="_blank" style="font-weight:600; color:var(--text-primary); text-decoration:none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">📄 ${d.title}</a>
                     <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Type: ${d.file_type || 'Unknown'} | Size: ${d.file_size ? (d.file_size / 1024).toFixed(1) + ' KB' : 'Unknown'}</div>
                 </div>
                 <button class="btn btn-sm btn-secondary" onclick="deleteStageDocument(${d.id})">🗑️</button>
@@ -1642,7 +1644,7 @@ async function handleStageFileUpload(event) {
         showAlert('Uploading stage document...', 'Info');
         
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/documents', true);
+        xhr.open('POST', 'http://127.0.0.1:8000/api/documents', true);
         
         xhr.upload.onprogress = function(e) {
             if (e.lengthComputable) {
@@ -2138,7 +2140,7 @@ async function loadProjectTimeline(projectId, containerId = 'project-overview-ti
             if (ev.type === 'stage') {
                 // attachments badges
                 const attachmentsArr = (function(a){ if(!a) return []; if(Array.isArray(a)) return a; if(typeof a==='string'){ try{ const p=JSON.parse(a); if(Array.isArray(p)) return p.map(x=> (typeof x==='object'&&x.id)?x.id:x); }catch(e){} return a.split(',').map(s=>s.trim()).filter(Boolean);} return []; })(ev.attachments);
-                const attachmentsHtml = attachmentsArr.map(att=>{ const id = (typeof att==='object'&&att.id)?att.id:att; const doc = docsById[String(id)]; const title=(doc&&(doc.title||doc.file_path||doc.source_path))?(doc.title||doc.file_path||doc.source_path):id; const isImage = doc && String(doc.file_type||'').toLowerCase().includes('image'); const thumb = isImage ? `<img src="/api/documents/${id}/view" class="attachment-thumb">` : ''; return `<span class="attachment-badge" title="${escapeHtml(String(title))}" onclick="event.stopPropagation(); viewDocument(${id})">${thumb}<span class="attachment-title">${escapeHtml(String(title))}</span><button class=\\"attachment-remove\\" onclick=\\"event.stopPropagation(); removeAttachmentFromStage(${ev.id}, ${projectId}, ${id})\\">✖</button></span>`; }).join(' ');
+                const attachmentsHtml = attachmentsArr.map(att=>{ const id = (typeof att==='object'&&att.id)?att.id:att; const doc = docsById[String(id)]; const title=(doc&&(doc.title||doc.file_path||doc.source_path))?(doc.title||doc.file_path||doc.source_path):id; const isImage = doc && String(doc.file_type||'').toLowerCase().includes('image'); const thumb = isImage ? `<img src="http://127.0.0.1:8000/api/documents/${id}/view" class="attachment-thumb">` : ''; return `<span class="attachment-badge" title="${escapeHtml(String(title))}" onclick="event.stopPropagation(); viewDocument(${id})">${thumb}<span class="attachment-title">${escapeHtml(String(title))}</span><button class=\\"attachment-remove\\" onclick=\\"event.stopPropagation(); removeAttachmentFromStage(${ev.id}, ${projectId}, ${id})\\">✖</button></span>`; }).join(' ');
                 // highlight active stage
                 const activeClass = (ev.status && ev.status.toLowerCase() === 'in_progress') ? 'timeline-active-stage' : '';
                 
@@ -2994,7 +2996,7 @@ async function renderExperimentTimeline(experimentId) {
                         if (['png','jpg','jpeg','gif','svg','webp','bmp'].includes(ext)) isImage = true;
                     }
 
-                    const thumbHtml = isImage ? `<img src="/api/documents/${id}/view" class="attachment-thumb">` : '';
+                    const thumbHtml = isImage ? `<img src="http://127.0.0.1:8000/api/documents/${id}/view" class="attachment-thumb">` : '';
 
                     return `<span class="attachment-badge" title="${escapeHtml(String(title))}" onclick="event.stopPropagation(); viewDocument(${id})">${thumbHtml}<span class="attachment-title">${escapeHtml(String(title))}</span><button class=\\"attachment-remove\\" onclick=\\"event.stopPropagation(); removeAttachmentFromStage(${ev.id}, ${experimentId}, ${id})\\">✖</button></span>`;
                 }).join(' ');
@@ -3410,9 +3412,9 @@ function renderDocumentsGrid(documents) {
             if (isNote) {
                 thumbnailHtml = `<div class="icon">📝</div>`;
             } else if (isImage) {
-                thumbnailHtml = `<img src="/api/documents/${doc.id}/view" class="document-thumbnail" alt="${escapeHtml(doc.title)}">`;
+                thumbnailHtml = `<img src="http://127.0.0.1:8000/api/documents/${doc.id}/view" class="document-thumbnail" alt="${escapeHtml(doc.title)}">`;
             } else if (isVideo) {
-                thumbnailHtml = `<video src="/api/documents/${doc.id}/view" class="document-thumbnail" muted></video>`;
+                thumbnailHtml = `<video src="http://127.0.0.1:8000/api/documents/${doc.id}/view" class="document-thumbnail" muted></video>`;
             } else {
                 const icon = getDocumentIcon(doc.file_type);
                 thumbnailHtml = `<div class="icon">${icon}</div>`;
@@ -3464,9 +3466,9 @@ function renderDocumentsList(documents) {
             if (isNote) {
                 thumbnailHtml = `<span style="font-size: 24px;">📝</span>`;
             } else if (isImage) {
-                thumbnailHtml = `<img src="/api/documents/${doc.id}/view" class="document-thumbnail-small" alt="${escapeHtml(doc.title)}">`;
+                thumbnailHtml = `<img src="http://127.0.0.1:8000/api/documents/${doc.id}/view" class="document-thumbnail-small" alt="${escapeHtml(doc.title)}">`;
             } else if (isVideo) {
-                thumbnailHtml = `<video src="/api/documents/${doc.id}/view" class="document-thumbnail-small" muted></video>`;
+                thumbnailHtml = `<video src="http://127.0.0.1:8000/api/documents/${doc.id}/view" class="document-thumbnail-small" muted></video>`;
             } else {
                 const icon = getDocumentIcon(doc.file_type);
                 thumbnailHtml = `<span style="font-size: 24px;">${icon}</span>`;
@@ -3513,7 +3515,7 @@ async function viewDocument(docId) {
     
     try {
         // Fetch document metadata
-        const response = await apiFetch(`/api/documents/${docId}/view`);
+        const response = await fetch(`http://127.0.0.1:8000/api/documents/${docId}/view`);
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
         
@@ -3895,7 +3897,7 @@ async function downloadCurrentDocument() {
     if (!currentDocumentId) return;
     
     try {
-        const response = await apiFetch(`/api/documents/${currentDocumentId}/view`);
+        const response = await fetch(`http://127.0.0.1:8000/api/documents/${currentDocumentId}/view`);
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
         
@@ -4107,7 +4109,7 @@ async function uploadDocument(file) {
         showAlert('Uploading document...', 'Info');
         
         const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/documents', true);
+        xhr.open('POST', 'http://127.0.0.1:8000/api/documents', true);
         
         xhr.upload.onprogress = function(e) {
             if (e.lengthComputable) {
@@ -4179,7 +4181,7 @@ async function uploadFolder(files) {
             formData.append('title', title);
             formData.append('file_type', file_type);
             
-            const response = await apiFetch('/api/documents', {
+            const response = await apiFetch('http://127.0.0.1:8000/api/documents', {
                 method: 'POST',
                 body: formData
             });
@@ -5667,18 +5669,8 @@ function toggleAIPanel() {
     panel.classList.toggle('collapsed');
     if (panel.classList.contains('collapsed')) {
         document.body.classList.remove('ai-panel-open');
-        // Hide history icon when panel is collapsed
-        const historyBtn = document.querySelector('.ai-panel-actions .dropdown-toggle');
-        if (historyBtn) {
-            historyBtn.style.display = 'none';
-        }
     } else {
         document.body.classList.add('ai-panel-open');
-        // Show history icon when panel is open
-        const historyBtn = document.querySelector('.ai-panel-actions .dropdown-toggle');
-        if (historyBtn) {
-            historyBtn.style.display = 'flex';
-        }
     }
 }
 
@@ -7195,7 +7187,7 @@ function showModal(options) {
                             const ext = f.name.split('.').pop().toLowerCase();
                             form.append('file_type', ext);
                             try {
-                                const resp = await fetch('/api/documents', { method: 'POST', body: form });
+                                const resp = await fetch('http://127.0.0.1:8000/api/documents', { method: 'POST', body: form });
                                 if (resp.ok) {
                                     const data = await resp.json();
                                     if (data && data.id) uploadedIds.push(data.id);

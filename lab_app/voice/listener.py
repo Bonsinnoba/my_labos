@@ -2,7 +2,7 @@
 Voice Listener Module
 
 This module handles background microphone monitoring and wake word detection.
-It runs on a separate thread to avoid blocking the main Flet GUI loop.
+It runs on a separate thread to avoid blocking the main application loop.
 """
 
 import speech_recognition as sr
@@ -290,38 +290,6 @@ class VoiceListener:
             The response message
         """
         return self.interpreter.process_command(command_text)
-
-
-def start_voice_thread(flet_page_context, 
-                      wake_word: str = "jarvis",
-                      db_path: str = "local_cache.db") -> VoiceListener:
-    """
-    Start the voice listener thread and integrate with Flet page.
-    
-    Args:
-        flet_page_context: The Flet page object (for UI updates if needed)
-        wake_word: The wake word to use
-        db_path: Path to the SQLite database file
-        
-    Returns:
-        The VoiceListener instance
-    """
-    
-    def on_command_processed(command_text: str):
-        """Callback when a command is processed."""
-        print(f"📝 Command processed: {command_text}")
-        # You can update the Flet UI here if needed
-        # For example: flet_page_context.snack_bar = ft.SnackBar(...)
-        # flet_page_context.update()
-    
-    listener = VoiceListener(
-        wake_word=wake_word,
-        db_path=db_path,
-        on_command_processed=on_command_processed
-    )
-    
-    listener.start()
-    return listener
 
 
 if __name__ == "__main__":

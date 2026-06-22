@@ -1,0 +1,17 @@
+# Python build artifacts
+python-dist/
+build/
+*.spec
+
+# Electron build artifacts
+dist/
+*.dmg
+*.exe
+*.AppImage
+
+# Node modules
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db

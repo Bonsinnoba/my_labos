@@ -14,6 +14,8 @@ import time
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
+from lab_app.auth.audit_logger import AuditLogger
+
 
 class CacheDatabase:
     """Manages local SQLite database for offline-first lab application."""
@@ -32,6 +34,35 @@ class CacheDatabase:
         self.device_id = device_id or self._get_or_generate_device_id()
         self.conn: Optional[sqlite3.Connection] = None
         self._initialize_database()
+        
+        # Initialize audit logger for tracking who did what when
+        self.audit_logger = AuditLogger(db_path)
+    
+    def _log_audit(self, action: str, table_name: str, record_id: int,
+                  user_id: Optional[str] = None, personnel_name: Optional[str] = None,
+                  details: Optional[Dict] = None) -> None:
+        """
+        Log an audit action using the audit logger.
+        
+        Args:
+            action: Action type (create, update, delete)
+            table_name: Name of the table
+            record_id: ID of the record
+            user_id: User ID (for mobile)
+            personnel_name: Personnel name (optional)
+            details: Additional details
+        """
+        # Use device_id for desktop, user_id for mobile
+        identifier = user_id if user_id else self.device_id
+        self.audit_logger.log_action(
+            action=action,
+            table_name=table_name,
+            record_id=record_id,
+            user_id=user_id,
+            device_id=self.device_id if not user_id else None,
+            personnel_name=personnel_name,
+            details=details
+        )
     
     def _initialize_database(self) -> None:
         """Create database tables if they don't exist."""
@@ -49,7 +80,11 @@ class CacheDatabase:
                     model TEXT,
                     status TEXT NOT NULL DEFAULT 'available',
                     calibration_date TEXT,
-                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_by TEXT,
+                    edited_by TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    edited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
@@ -63,7 +98,10 @@ class CacheDatabase:
                     start_date TEXT,
                     summary_findings TEXT,
                     project_outcome TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_by TEXT,
+                    edited_by TEXT,
+                    edited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             
@@ -79,6 +117,10 @@ class CacheDatabase:
                     is_downloaded_locally INTEGER DEFAULT 0,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     status TEXT DEFAULT 'Active',
+                    created_by TEXT,
+                    edited_by TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    edited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
                 )
             """)
@@ -358,6 +400,10 @@ class CacheDatabase:
                 stage_id INTEGER,
                 upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_accessed TIMESTAMP,
+                created_by TEXT,
+                edited_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                edited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL,
                 FOREIGN KEY (component_id) REFERENCES components(id) ON DELETE SET NULL,
                 FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE SET NULL
@@ -378,6 +424,8 @@ class CacheDatabase:
                 voice_transcription TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_by TEXT,
+                edited_by TEXT,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
             )
         """)
