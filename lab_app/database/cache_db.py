@@ -2187,8 +2187,9 @@ class CacheDatabase:
             cursor.execute("""
                 INSERT INTO knowledge_vault (title, file_path, file_type, file_size, 
                                            description, metadata, tags, project_id, 
-                                           component_id, equipment_id, experiment_id, stage_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                           component_id, equipment_id, experiment_id, stage_id,
+                                           cloud_file_url, is_synced)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
             """, (title, file_path, file_type, file_size, description, metadata, 
                   tags, project_id, component_id, equipment_id, experiment_id, stage_id))
             self.conn.commit()

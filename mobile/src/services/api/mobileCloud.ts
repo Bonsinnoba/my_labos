@@ -93,21 +93,21 @@ export class MobileCloudApiClient {
 // Create singleton instance from environment variables
 const createMobileCloudApiClient = (): MobileCloudApiClient | null => {
   const cloudApiUrl = process.env.EXPO_PUBLIC_CLOUD_API_URL || process.env.CLOUD_API_URL;
-  const account2Endpoint = process.env.EXPO_PUBLIC_ACCOUNT_2_ENDPOINT || process.env.ACCOUNT_2_ENDPOINT;
-  const account2KeyId = process.env.EXPO_PUBLIC_ACCOUNT_2_KEY_ID || process.env.ACCOUNT_2_KEY_ID;
-  const account2ApplicationKey = process.env.EXPO_PUBLIC_ACCOUNT_2_APPLICATION_KEY || process.env.ACCOUNT_2_APPLICATION_KEY;
+  const meshSyncEndpoint = process.env.EXPO_PUBLIC_MESH_SYNC_ENDPOINT || process.env.MESH_SYNC_ENDPOINT || 'https://s3.eu-central-003.backblazeb2.com';
+  const meshSyncKeyId = process.env.EXPO_PUBLIC_MESH_SYNC_KEY_ID || process.env.MESH_SYNC_KEY_ID;
+  const meshSyncApplicationKey = process.env.EXPO_PUBLIC_MESH_SYNC_APPLICATION_KEY || process.env.MESH_SYNC_APPLICATION_KEY;
   const meshSyncBucket = process.env.EXPO_PUBLIC_MESH_SYNC_BUCKET || process.env.MESH_SYNC_BUCKET;
 
-  if (!cloudApiUrl || !account2KeyId || !account2ApplicationKey) {
+  if (!cloudApiUrl || !meshSyncKeyId || !meshSyncApplicationKey) {
     console.log('[MobileCloudAPI] Cloud API credentials not configured');
     return null;
   }
 
   const config: MobileCloudConfig = {
     cloudApiUrl,
-    account2Endpoint: account2Endpoint || 'https://s3.us-east-005.backblazeb2.com',
-    account2KeyId,
-    account2ApplicationKey,
+    account2Endpoint: meshSyncEndpoint,
+    account2KeyId: meshSyncKeyId,
+    account2ApplicationKey: meshSyncApplicationKey,
     meshSyncBucket: meshSyncBucket || 'lab-mesh-sync',
   };
 

@@ -34,7 +34,12 @@ class KnowledgeVault:
         """
         self.db = db if db else CacheDatabase()
         self.vault_path = Path(vault_path)
-        self.vault_path.mkdir(exist_ok=True)
+        try:
+            self.vault_path.mkdir(exist_ok=True)
+            print(f"[KnowledgeVault] Initialized with vault path: {self.vault_path.absolute()}")
+        except Exception as e:
+            print(f"[KnowledgeVault] Failed to create vault directory: {e}")
+            raise
         
         # Create subdirectories for different file types
         (self.vault_path / "pdfs").mkdir(exist_ok=True)
@@ -179,7 +184,11 @@ class KnowledgeVault:
         storage_path = self._get_storage_path(file_type, new_filename)
         
         import shutil
-        shutil.move(source_path, storage_path)
+        try:
+            shutil.move(source_path, storage_path)
+        except Exception as e:
+            print(f"Failed to move file from {source_path} to {storage_path}: {e}")
+            raise
         
         # Extract metadata
         metadata = self._extract_metadata(storage_path, file_type)

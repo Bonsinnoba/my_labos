@@ -95,13 +95,13 @@ except Exception as e:
 # Initialize mesh sync coordinator for peer-to-peer lab computer sync
 mesh_coordinator: Optional[MeshSyncCoordinator] = None
 try:
-    # Use the same B2 bucket for mesh transactions (use account 2 for smaller transaction files)
+    # Use dedicated mesh sync credentials
     mesh_coordinator = MeshSyncCoordinator(
         db_path=os.getenv("DATABASE_PATH", "local_cache.db"),
         b2_bucket_name=os.getenv("MESH_SYNC_BUCKET", "lab-mesh-sync"),
-        b2_endpoint_url=os.getenv("ACCOUNT_2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com"),
-        b2_access_key_id=os.getenv("ACCOUNT_2_KEY_ID", ""),
-        b2_secret_access_key=os.getenv("ACCOUNT_2_APPLICATION_KEY", "")
+        b2_endpoint_url=os.getenv("MESH_SYNC_ENDPOINT", "https://s3.eu-central-003.backblazeb2.com"),
+        b2_access_key_id=os.getenv("MESH_SYNC_KEY_ID", ""),
+        b2_secret_access_key=os.getenv("MESH_SYNC_APPLICATION_KEY", "")
     )
     # Start mesh sync loop
     mesh_coordinator.start_sync_loop()
@@ -737,13 +737,16 @@ async def get_documents(project_id: Optional[int] = None, file_type: Optional[st
 async def add_document(file: UploadFile = File(...), title: str = Form(...), file_type: str = Form(...),
                        project_id: Optional[int] = Form(None), experiment_id: Optional[int] = Form(None),
                        stage_id: Optional[int] = Form(None)):
-    """Add a new document to the knowledge vault."""
+    """Add a new document to the knowledge vault (FormData upload)."""
+    print(f"[DEBUG] Upload request received (FormData): title={title}, file_type={file_type}, filename={file.filename}")
     try:
         documents_dir = "documents"
         os.makedirs(documents_dir, exist_ok=True)
         
         safe_filename = f"{int(time.time())}_{file.filename}"
         file_path = os.path.join(documents_dir, safe_filename)
+        
+        print(f"[DEBUG] Saving file to: {file_path}")
         
         # Use chunked copying for better performance with large files
         chunk_size = 8192  # 8KB chunks
@@ -752,6 +755,12 @@ async def add_document(file: UploadFile = File(...), title: str = Form(...), fil
                 buffer.write(chunk)
         
         print(f"Uploading document: title={title}, file_type={file_type}, file_path={file_path}, project_id={project_id}, experiment_id={experiment_id}, stage_id={stage_id}")
+        
+        # Check if file was saved successfully
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Failed to save uploaded file to {file_path}")
+        
+        print(f"[DEBUG] File saved successfully, calling knowledge_vault.add_document")
         
         doc_id = knowledge_vault.add_document(
             source_path=file_path,
@@ -773,6 +782,66 @@ async def add_document(file: UploadFile = File(...), title: str = Form(...), fil
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class DocumentUploadJSON(BaseModel):
+    title: str
+    file_type: str
+    file_name: str
+    file_data: str
+    project_id: Optional[int] = None
+    experiment_id: Optional[int] = None
+    stage_id: Optional[int] = None
+
+
+@app.post("/api/documents/json")
+async def add_document_json(payload: DocumentUploadJSON):
+    """Add a new document to the knowledge vault (JSON upload with base64 file data)."""
+    print(f"[DEBUG] Upload request received (JSON): title={payload.title}, file_type={payload.file_type}")
+    try:
+        import base64
+        
+        # Decode base64 to bytes
+        file_bytes = base64.b64decode(payload.file_data)
+        
+        documents_dir = "documents"
+        os.makedirs(documents_dir, exist_ok=True)
+        
+        safe_filename = f"{int(time.time())}_{payload.file_name}"
+        file_path = os.path.join(documents_dir, safe_filename)
+        
+        print(f"[DEBUG] Saving file to: {file_path}, size: {len(file_bytes)} bytes")
+        
+        # Write file
+        with open(file_path, "wb") as buffer:
+            buffer.write(file_bytes)
+        
+        print(f"Uploading document: title={payload.title}, file_type={payload.file_type}, file_path={file_path}, project_id={payload.project_id}, experiment_id={payload.experiment_id}, stage_id={payload.stage_id}")
+        
+        # Check if file was saved successfully
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Failed to save uploaded file to {file_path}")
+        
+        print(f"[DEBUG] File saved successfully, calling knowledge_vault.add_document")
+        
+        doc_id = knowledge_vault.add_document(
+            source_path=file_path,
+            title=payload.title,
+            description=None,
+            tags=None,
+            project_id=payload.project_id,
+            component_id=None,
+            equipment_id=None,
+            experiment_id=payload.experiment_id,
+            stage_id=payload.stage_id
+        )
+        print(f"Document uploaded successfully with ID: {doc_id}")
+        return {"id": doc_id, "message": "Document added successfully"}
+    except Exception as e:
+        print(f"Error uploading document (JSON): {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: int):
     """Delete a document."""
@@ -789,8 +858,10 @@ async def delete_document(doc_id: int):
 @app.get("/api/documents/{doc_id}/view")
 async def view_document(doc_id: int):
     """View/download a document file."""
+    print(f"[DEBUG] view_document called with doc_id={doc_id}")
     try:
         doc = db.get_document(doc_id)
+        print(f"[DEBUG] db.get_document returned: {doc is not None}")
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
         
@@ -798,9 +869,10 @@ async def view_document(doc_id: int):
         # Convert to absolute path
         abs_file_path = os.path.abspath(file_path) if file_path else None
         
-        print(f"Viewing document: doc_id={doc_id}, file_path={file_path}, abs_path={abs_file_path}, exists={os.path.exists(abs_file_path) if abs_file_path else False}")
+        print(f"[DEBUG] Viewing document: doc_id={doc_id}, file_path={file_path}, abs_path={abs_file_path}, exists={os.path.exists(abs_file_path) if abs_file_path else False}")
         
         if not abs_file_path or not os.path.exists(abs_file_path):
+            print(f"[DEBUG] File not found: {abs_file_path}")
             raise HTTPException(status_code=404, detail="File not found")
         
         # Detect MIME type based on file extension
@@ -809,7 +881,7 @@ async def view_document(doc_id: int):
         if not mime_type:
             mime_type = 'application/octet-stream'
         
-        print(f"Serving file with MIME type: {mime_type}")
+        print(f"[DEBUG] Serving file with MIME type: {mime_type}")
         
         return FileResponse(
             path=abs_file_path,
@@ -819,7 +891,7 @@ async def view_document(doc_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error viewing document: {e}")
+        print(f"[DEBUG] Error viewing document: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

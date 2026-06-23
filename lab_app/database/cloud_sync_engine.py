@@ -505,7 +505,10 @@ class DualAccountSyncEngine:
             target_client = self.account2_client
             target_bucket = self.config["ACCOUNT_2_BUCKET"]
             account_name = "Account #2"
-            logger.info(f"Small file ({file_size / 1024 / 1024:.2f} MB if known), targeting Account #2 (Light Storage)")
+            if file_size is not None:
+                logger.info(f"Small file ({file_size / 1024 / 1024:.2f} MB), targeting Account #2 (Light Storage)")
+            else:
+                logger.info(f"Small file (size unknown), targeting Account #2 (Light Storage)")
         
         if not target_client:
             logger.error(f"{account_name} client not initialized - cannot delete {file_name}")

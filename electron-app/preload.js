@@ -24,5 +24,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
       console.error('API fetch error:', error);
       throw error;
     }
+  },
+  
+  // Dedicated file upload function
+  uploadFile: async (formDataFields) => {
+    try {
+      const response = await ipcRenderer.invoke('upload-file', formDataFields);
+      
+      return {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        json: async () => JSON.parse(response.body),
+        text: async () => response.body
+      };
+    } catch (error) {
+      console.error('File upload error:', error);
+      throw error;
+    }
   }
 });

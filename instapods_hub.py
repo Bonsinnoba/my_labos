@@ -313,10 +313,10 @@ def initialize_mesh_coordinator():
     # Load environment variables
     db_path = os.getenv("DATABASE_PATH", "local_cache.db")
     device_id = os.getenv("INSTAPODS_DEVICE_ID", "INSTAPODS_HUB")
-    b2_bucket_name = os.getenv("B2_ACCOUNT2_BUCKET", "")  # Use Account #2 for sync bundles
-    b2_endpoint_url = os.getenv("B2_ACCOUNT2_ENDPOINT", os.getenv("B2_ENDPOINT_URL", ""))
-    b2_access_key_id = os.getenv("B2_ACCOUNT2_KEY_ID", os.getenv("B2_ACCESS_KEY_ID", ""))
-    b2_secret_access_key = os.getenv("B2_ACCOUNT2_APPLICATION_KEY", os.getenv("B2_SECRET_ACCESS_KEY", ""))
+    b2_bucket_name = os.getenv("MESH_SYNC_BUCKET", "lab-mesh-sync")
+    b2_endpoint_url = os.getenv("MESH_SYNC_ENDPOINT", "https://s3.eu-central-003.backblazeb2.com")
+    b2_access_key_id = os.getenv("MESH_SYNC_KEY_ID", "")
+    b2_secret_access_key = os.getenv("MESH_SYNC_APPLICATION_KEY", "")
     
     mesh_coordinator = MeshSyncCoordinator(
         db_path=db_path,

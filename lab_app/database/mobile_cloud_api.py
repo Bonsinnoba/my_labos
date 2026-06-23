@@ -432,9 +432,9 @@ def create_mobile_cloud_api() -> Optional[MobileCloudAPI]:
         MobileCloudAPI instance or None if credentials not available
     """
     b2_bucket_name = os.getenv("MESH_SYNC_BUCKET", "lab-mesh-sync")
-    b2_endpoint_url = os.getenv("ACCOUNT_2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com")
-    b2_access_key_id = os.getenv("ACCOUNT_2_KEY_ID", "")
-    b2_secret_access_key = os.getenv("ACCOUNT_2_APPLICATION_KEY", "")
+    b2_endpoint_url = os.getenv("MESH_SYNC_ENDPOINT", "https://s3.eu-central-003.backblazeb2.com")
+    b2_access_key_id = os.getenv("MESH_SYNC_KEY_ID", "")
+    b2_secret_access_key = os.getenv("MESH_SYNC_APPLICATION_KEY", "")
     gemini_api_key = os.getenv("GEMINI_API_KEY", "")
 
     if not b2_access_key_id or not b2_secret_access_key:

@@ -1643,31 +1643,18 @@ async function handleStageFileUpload(event) {
         
         showAlert('Uploading stage document...', 'Info');
         
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', 'http://127.0.0.1:8000/api/documents', true);
+        console.log('[DEBUG] Starting stage upload via apiFetch to /api/documents');
+        console.log('[DEBUG] File:', file.name, 'Size:', file.size);
         
-        xhr.upload.onprogress = function(e) {
-            if (e.lengthComputable) {
-                const percent = (e.loaded / e.total) * 100;
-                showAlert(`Uploading: ${Math.round(percent)}%`, 'Info');
-            }
-        };
+        const response = await apiFetch('/api/documents', {
+            method: 'POST',
+            body: formData
+        });
         
-        xhr.onload = function() {
-            if (xhr.status === 200) {
-                showAlert('Stage document uploaded successfully', 'Success');
-                loadStageDocuments(currentStageId);
-                refreshDashboardInBackground();
-            } else {
-                showAlert('Failed to upload stage document', 'Error');
-            }
-        };
-        
-        xhr.onerror = function() {
-            showAlert('Error uploading document', 'Error');
-        };
-        
-        xhr.send(formData);
+        const data = await response.json();
+        showAlert('Stage document uploaded successfully', 'Success');
+        loadStageDocuments(currentStageId);
+        refreshDashboardInBackground();
     } catch (error) {
         console.error('Error uploading stage document:', error);
         showAlert('Error uploading document', 'Error');
@@ -3423,11 +3410,13 @@ function renderDocumentsGrid(documents) {
             const clickHandler = isNote ? `loadNoteInEditor(${doc.id}, true)` : `viewDocument(${doc.id})`;
             const deleteHandler = isNote ? `deleteNotebookEntry(${doc.id})` : `deleteDocument(${doc.id})`;
             
+            const displayDate = isNote ? (doc.created_at || 'No date') : (doc.upload_date || doc.created_at || 'No date');
+            
             return `
                 <div class="document-card" onclick="${clickHandler}" style="cursor: pointer;">
                     ${thumbnailHtml}
                     <div class="title">${doc.title}</div>
-                    <div class="meta">${isNote ? (doc.created_at || 'No date') : (doc.created_at || 'No date')}</div>
+                    <div class="meta">${displayDate}</div>
                     <div class="meta">${isNote ? 'Note' : (doc.project_id ? 'Project linked' : 'No project')}</div>
                     <div class="tags">
                         ${doc.tags ? doc.tags.split(',').slice(0, 3).map(tag => `<span class="document-tag">${tag.trim()}</span>`).join('') : ''}
@@ -3477,6 +3466,8 @@ function renderDocumentsList(documents) {
             const clickHandler = isNote ? `loadNoteInEditor(${doc.id}, true)` : `viewDocument(${doc.id})`;
             const deleteHandler = isNote ? `deleteNotebookEntry(${doc.id})` : `deleteDocument(${doc.id})`;
             
+            const displayDate = isNote ? (doc.created_at || 'No date') : (doc.upload_date || doc.created_at || 'No date');
+            
             return `
                 <div class="content-item" onclick="${clickHandler}" style="cursor: pointer;">
                     <div style="display: flex; align-items: center; gap: 12px;">
@@ -3484,6 +3475,7 @@ function renderDocumentsList(documents) {
                         <div>
                             <div class="title">${doc.title}</div>
                             <div class="description">${isNote ? (doc.content?.substring(0, 100) || 'No description') : (doc.description || 'No description')}</div>
+                            <div class="meta" style="font-size: 12px; color: var(--text-muted);">${displayDate}</div>
                         </div>
                     </div>
                     <button class="btn btn-secondary" onclick="event.stopPropagation(); ${deleteHandler}">🗑️</button>
@@ -4089,50 +4081,40 @@ async function uploadDocument(file) {
     }
     
     try {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('title', title);
-        formData.append('file_type', file_type);
-        
-        // Add context parameters
-        if (currentProjectId) {
-            formData.append('project_id', currentProjectId);
-        }
-        if (currentExperimentId) {
-            formData.append('experiment_id', currentExperimentId);
-        }
-        if (currentStageId) {
-            formData.append('stage_id', currentStageId);
-        }
-        
         // Show upload progress
         showAlert('Uploading document...', 'Info');
         
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', 'http://127.0.0.1:8000/api/documents', true);
+        console.log('[DEBUG] Starting upload via electronAPI.uploadFile');
+        console.log('[DEBUG] File:', file.name, 'Size:', file.size);
         
-        xhr.upload.onprogress = function(e) {
-            if (e.lengthComputable) {
-                const percentComplete = (e.loaded / e.total) * 100;
-                showAlert(`Uploading: ${Math.round(percentComplete)}%`, 'Info');
-            }
+        // Convert file to base64 for IPC transfer
+        const fileData = await fileToBase64(file);
+        
+        // Prepare form data fields
+        const formDataFields = {
+            title: title,
+            file_type: file_type,
+            file_name: file.name,
+            file_data: fileData
         };
         
-        xhr.onload = function() {
-            if (xhr.status === 200) {
-                showAlert('Document uploaded successfully', 'Success');
-                loadDocuments();
-                refreshDashboardInBackground();
-            } else {
-                showAlert('Failed to upload document', 'Error');
-            }
-        };
+        if (currentProjectId) {
+            formDataFields.project_id = currentProjectId;
+        }
+        if (currentExperimentId) {
+            formDataFields.experiment_id = currentExperimentId;
+        }
+        if (currentStageId) {
+            formDataFields.stage_id = currentStageId;
+        }
         
-        xhr.onerror = function() {
-            showAlert('Error uploading document', 'Error');
-        };
+        // Use dedicated IPC upload handler
+        const response = await window.electronAPI.uploadFile(formDataFields);
         
-        xhr.send(formData);
+        const data = await response.json();
+        showAlert('Document uploaded successfully', 'Success');
+        loadDocuments();
+        refreshDashboardInBackground();
     } catch (error) {
         console.error('Error uploading document:', error);
         showAlert('Error uploading document', 'Error');
@@ -4140,6 +4122,21 @@ async function uploadDocument(file) {
     
     // Reset file input
     document.getElementById('document-file-input').value = '';
+}
+
+// Helper function to convert file to base64
+async function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const result = reader.result;
+            // Remove data URL prefix if present
+            const base64 = result.split(',')[1];
+            resolve(base64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
 }
 
 async function uploadFolder(files) {

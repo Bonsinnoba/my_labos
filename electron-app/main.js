@@ -25,10 +25,8 @@ function createWindow() {
   // Load the local web UI HTML file
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-  // Open DevTools in development
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.webContents.openDevTools();
-  }
+  // Open DevTools for debugging
+  mainWindow.webContents.openDevTools();
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -142,6 +140,65 @@ ipcMain.handle('api-call', async (event, url, options) => {
     };
   } catch (error) {
     console.error('API call error:', error);
+    throw error;
+  }
+});
+
+// Dedicated file upload handler
+ipcMain.handle('upload-file', async (event, formDataFields) => {
+  try {
+    const fullUrl = `http://127.0.0.1:8000/api/documents/json`;
+    
+    console.log('[DEBUG] Upload handler called with fields:', Object.keys(formDataFields));
+    
+    // Extract file data
+    const { file_data, file_name, title, file_type, ...otherFields } = formDataFields;
+    
+    console.log('[DEBUG] File name:', file_name, 'Title:', title, 'Type:', file_type);
+    
+    // Send as JSON with base64 file data
+    const payload = {
+      title: title,
+      file_type: file_type,
+      file_name: file_name,
+      file_data: file_data,
+      ...otherFields
+    };
+    
+    console.log('[DEBUG] Sending JSON request to:', fullUrl);
+    
+    const response = await fetch(fullUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+    
+    const body = await response.text();
+    console.log('[DEBUG] Response status:', response.status, response.statusText);
+    console.log('[DEBUG] Response body:', body);
+    
+    return {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      body: body
+    };
+  } catch (error) {
+    console.error('File upload error:', error);
+    throw error;
+  }
+});
+
+// Write file handler for saving uploaded files to temp location
+ipcMain.handle('write-file', async (event, filePath, buffer) => {
+  try {
+    const fs = require('fs');
+    fs.writeFileSync(filePath, Buffer.from(buffer));
+    return { success: true };
+  } catch (error) {
+    console.error('Write file error:', error);
     throw error;
   }
 });
