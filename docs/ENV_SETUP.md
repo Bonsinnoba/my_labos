@@ -17,16 +17,16 @@ These environment variables are required on each lab workstation running the mes
 
 ```bash
 # Account #1 - Heavy Storage Bucket (files >= 50MB)
-B2_ACCOUNT1_ENDPOINT=https://s3.us-east-005.backblazeb2.com
-B2_ACCOUNT1_KEY_ID=your_account1_key_id
-B2_ACCOUNT1_APPLICATION_KEY=your_account1_application_key
-B2_ACCOUNT1_BUCKET=lab-heavy-storage
+ACCOUNT_1_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+ACCOUNT_1_KEY_ID=your_account1_key_id
+ACCOUNT_1_APPLICATION_KEY=your_account1_application_key
+ACCOUNT_1_BUCKET=lab-heavy-storage
 
 # Account #2 - Light Storage Bucket (files < 50MB and sync bundles)
-B2_ACCOUNT2_ENDPOINT=https://s3.us-east-005.backblazeb2.com
-B2_ACCOUNT2_KEY_ID=your_account2_key_id
-B2_ACCOUNT2_APPLICATION_KEY=your_account2_application_key
-B2_ACCOUNT2_BUCKET=lab-light-storage
+ACCOUNT_2_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+ACCOUNT_2_KEY_ID=your_account2_key_id
+ACCOUNT_2_APPLICATION_KEY=your_account2_application_key
+ACCOUNT_2_BUCKET=lab-light-storage
 ```
 
 ### Supabase Configuration (for mirroring)
@@ -81,15 +81,15 @@ JWT_SECRET=your_jwt_secret_here
 
 ```bash
 # Backblaze B2 Configuration
-B2_ACCOUNT1_ENDPOINT=https://s3.us-east-005.backblazeb2.com
-B2_ACCOUNT1_KEY_ID=your_account1_key_id
-B2_ACCOUNT1_APPLICATION_KEY=your_account1_application_key
-B2_ACCOUNT1_BUCKET=lab-heavy-storage
+ACCOUNT_1_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+ACCOUNT_1_KEY_ID=your_account1_key_id
+ACCOUNT_1_APPLICATION_KEY=your_account1_application_key
+ACCOUNT_1_BUCKET=lab-heavy-storage
 
-B2_ACCOUNT2_ENDPOINT=https://s3.us-east-005.backblazeb2.com
-B2_ACCOUNT2_KEY_ID=your_account2_key_id
-B2_ACCOUNT2_APPLICATION_KEY=your_account2_application_key
-B2_ACCOUNT2_BUCKET=lab-light-storage
+ACCOUNT_2_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+ACCOUNT_2_KEY_ID=your_account2_key_id
+ACCOUNT_2_APPLICATION_KEY=your_account2_application_key
+ACCOUNT_2_BUCKET=lab-light-storage
 
 # Supabase Configuration
 SUPABASE_URL=https://your-project.supabase.co

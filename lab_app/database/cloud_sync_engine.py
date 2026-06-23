@@ -3,8 +3,8 @@ Dual-Account Backblaze B2 Synchronization Engine
 
 This module handles dynamic routing of files to separate Backblaze B2 accounts
 based on a 50MB size threshold for 20GB free tier maximization:
-- Files < 50MB: Account #1 (Light Storage Bucket)
-- Files >= 50MB: Account #2 (Heavy Storage Bucket)
+- Files >= 50MB: Account #1 (Heavy Storage Bucket)
+- Files < 50MB: Account #2 (Light Storage Bucket)
 
 All files are encrypted locally using AES-256-GCM before upload for zero-knowledge privacy.
 """
@@ -518,6 +518,9 @@ class DualAccountSyncEngine:
             target_client.delete_object(Bucket=target_bucket, Key=file_name)
             logger.info(f"Successfully deleted {file_name} from {account_name}")
             return True
+        except target_client.exceptions.NoSuchKey:
+            logger.warning(f"File not found in {account_name}: {file_name} (may already be deleted)")
+            return True  # Consider it successful if already deleted
         except Exception as e:
             logger.error(f"Failed to delete {file_name} from {account_name}: {e}")
             return False

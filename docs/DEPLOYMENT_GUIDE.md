@@ -47,16 +47,16 @@ Add these to your `.env` file (see ENV_SETUP.md for details):
 
 ```bash
 # Account #1 - Heavy Storage
-B2_ACCOUNT1_ENDPOINT=https://s3.us-east-005.backblazeb2.com
-B2_ACCOUNT1_KEY_ID=your_account1_key_id
-B2_ACCOUNT1_APPLICATION_KEY=your_account1_application_key
-B2_ACCOUNT1_BUCKET=lab-heavy-storage
+ACCOUNT_1_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+ACCOUNT_1_KEY_ID=your_account1_key_id
+ACCOUNT_1_APPLICATION_KEY=your_account1_application_key
+ACCOUNT_1_BUCKET=lab-heavy-storage
 
 # Account #2 - Light Storage
-B2_ACCOUNT2_ENDPOINT=https://s3.us-east-005.backblazeb2.com
-B2_ACCOUNT2_KEY_ID=your_account2_key_id
-B2_ACCOUNT2_APPLICATION_KEY=your_account2_application_key
-B2_ACCOUNT2_BUCKET=lab-light-storage
+ACCOUNT_2_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+ACCOUNT_2_KEY_ID=your_account2_key_id
+ACCOUNT_2_APPLICATION_KEY=your_account2_application_key
+ACCOUNT_2_BUCKET=lab-light-storage
 ```
 
 ---
@@ -129,15 +129,15 @@ Create a `.env` file in the project root:
 
 ```bash
 # Backblaze B2 Configuration
-B2_ACCOUNT1_ENDPOINT=https://s3.us-east-005.backblazeb2.com
-B2_ACCOUNT1_KEY_ID=your_account1_key_id
-B2_ACCOUNT1_APPLICATION_KEY=your_account1_application_key
-B2_ACCOUNT1_BUCKET=lab-heavy-storage
+ACCOUNT_1_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+ACCOUNT_1_KEY_ID=your_account1_key_id
+ACCOUNT_1_APPLICATION_KEY=your_account1_application_key
+ACCOUNT_1_BUCKET=lab-heavy-storage
 
-B2_ACCOUNT2_ENDPOINT=https://s3.us-east-005.backblazeb2.com
-B2_ACCOUNT2_KEY_ID=your_account2_key_id
-B2_ACCOUNT2_APPLICATION_KEY=your_account2_application_key
-B2_ACCOUNT2_BUCKET=lab-light-storage
+ACCOUNT_2_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+ACCOUNT_2_KEY_ID=your_account2_key_id
+ACCOUNT_2_APPLICATION_KEY=your_account2_application_key
+ACCOUNT_2_BUCKET=lab-light-storage
 
 # Supabase Configuration
 SUPABASE_URL=https://your-project.supabase.co
@@ -184,15 +184,15 @@ Create a `.env` file on the Instapods server:
 
 ```bash
 # Backblaze B2 Configuration
-B2_ACCOUNT1_ENDPOINT=https://s3.us-east-005.backblazeb2.com
-B2_ACCOUNT1_KEY_ID=your_account1_key_id
-B2_ACCOUNT1_APPLICATION_KEY=your_account1_application_key
-B2_ACCOUNT1_BUCKET=lab-heavy-storage
+ACCOUNT_1_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+ACCOUNT_1_KEY_ID=your_account1_key_id
+ACCOUNT_1_APPLICATION_KEY=your_account1_application_key
+ACCOUNT_1_BUCKET=lab-heavy-storage
 
-B2_ACCOUNT2_ENDPOINT=https://s3.us-east-005.backblazeb2.com
-B2_ACCOUNT2_KEY_ID=your_account2_key_id
-B2_ACCOUNT2_APPLICATION_KEY=your_account2_application_key
-B2_ACCOUNT2_BUCKET=lab-light-storage
+ACCOUNT_2_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+ACCOUNT_2_KEY_ID=your_account2_key_id
+ACCOUNT_2_APPLICATION_KEY=your_account2_application_key
+ACCOUNT_2_BUCKET=lab-light-storage
 
 # Supabase Configuration
 SUPABASE_URL=https://your-project.supabase.co

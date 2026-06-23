@@ -14,7 +14,7 @@ import time
 import threading
 import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
@@ -27,14 +27,11 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
 from database.mesh_sync_coordinator import MeshSyncCoordinator
-from auth.auth_manager import AuthManager
 
 # Security
 security = HTTPBearer()
 JWT_SECRET = os.getenv("JWT_SECRET", "")
 
-# Initialize AuthManager
-auth_manager: Optional[AuthManager] = None
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -49,38 +46,28 @@ last_sync_timestamp: int = 0
 sync_running = False
 
 
-def verify_session(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
+def verify_jwt(credentials: HTTPAuthorizationCredentials = Depends(security)) -> bool:
     """
-    Verify session token for protected endpoints using AuthManager.
+    Verify JWT token for protected endpoints.
     
     Args:
         credentials: HTTP Bearer credentials
         
     Returns:
-        User information if valid
+        True if valid
         
     Raises:
         HTTPException: If token is invalid
     """
-    if not auth_manager:
-        # If AuthManager not initialized, fall back to JWT_SECRET check
-        if not JWT_SECRET:
-            # Development mode - allow all
-            return {"username": "dev_user", "role": "admin"}
-        
-        token = credentials.credentials
-        if token != JWT_SECRET:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return {"username": "api_user", "role": "admin"}
+    if not JWT_SECRET:
+        # If no JWT_SECRET configured, allow all (development mode)
+        return True
     
-    # Use AuthManager for session validation
-    session_token = credentials.credentials
-    session_result = auth_manager.validate_session(session_token)
-    
-    if not session_result["valid"]:
-        raise HTTPException(status_code=401, detail=session_result.get("message", "Invalid session"))
-    
-    return session_result["user"]
+    token = credentials.credentials
+    # Simple token verification - in production, use proper JWT validation
+    if token != JWT_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return True
 
 
 @app.get("/health")
@@ -99,73 +86,26 @@ async def health_check():
     }
 
 
-@app.post("/auth/login")
-async def login(username: str = Form(...), password: str = Form(...)):
-    """
-    Login endpoint for authentication.
-    
-    Args:
-        username: Username
-        password: Password
-        
-    Returns:
-        JSON with session token and user info
-    """
-    if not auth_manager:
-        raise HTTPException(status_code=503, detail="Authentication not available")
-    
-    result = auth_manager.authenticate_user(username, password)
-    
-    if not result["success"]:
-        raise HTTPException(status_code=401, detail=result["message"])
-    
-    return {
-        "success": True,
-        "session_token": result["session_token"],
-        "user": result["user"]
-    }
-
-
-@app.post("/auth/logout")
-async def logout(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """
-    Logout endpoint to invalidate session.
-    
-    Args:
-        credentials: Session token
-        
-    Returns:
-        JSON with logout status
-    """
-    if not auth_manager:
-        return {"success": True, "message": "Logged out (auth not available)"}
-    
-    session_token = credentials.credentials
-    result = auth_manager.logout_user(session_token)
-    
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result["message"])
-    
-    return result
 
 
 @app.get("/signed-url")
 async def get_signed_url(
     filename: str = Query(..., description="Filename to generate signed URL for"),
-    user: Dict[str, Any] = Depends(verify_session)
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
     Generate a time-limited B2 signed URL for file access.
     
-    Requires Bearer session token authentication.
+    Requires Bearer JWT authentication.
     
     Args:
         filename: The filename to generate a signed URL for
-        user: User information from session validation
+        credentials: JWT credentials
         
     Returns:
         JSON with signed_url and expiry_seconds
     """
+    verify_jwt(credentials)
     
     if not mesh_coordinator or not mesh_coordinator.s3_client:
         raise HTTPException(status_code=503, detail="B2 client not available")
@@ -197,21 +137,22 @@ async def get_signed_url(
 async def upload_file(
     file: UploadFile = File(..., description="File to upload"),
     filename: str = Form(..., description="Filename to use in B2"),
-    user: Dict[str, Any] = Depends(verify_session)
+    credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
     Upload a file to B2 via Instapods Hub.
     
-    Requires Bearer session token authentication.
+    Requires Bearer JWT authentication.
     
     Args:
         file: The file to upload
         filename: The filename to use in B2
-        user: User information from session validation
+        credentials: JWT credentials
         
     Returns:
         JSON with filename and upload status
     """
+    verify_jwt(credentials)
     
     if not mesh_coordinator or not mesh_coordinator.s3_client:
         raise HTTPException(status_code=503, detail="B2 client not available")
@@ -229,7 +170,7 @@ async def upload_file(
         
         # Get heavy bucket credentials if file is large
         if file_size >= 50 * 1024 * 1024:  # 50MB
-            heavy_bucket = os.getenv("B2_ACCOUNT1_BUCKET")
+            heavy_bucket = os.getenv("ACCOUNT_1_BUCKET")
             if heavy_bucket:
                 bucket_name = heavy_bucket
                 # Note: In production, you'd need to initialize a separate S3 client
@@ -308,7 +249,7 @@ def start_background_sync():
 
 def initialize_mesh_coordinator():
     """Initialize the MeshSyncCoordinator for Instapods Hub."""
-    global mesh_coordinator, auth_manager
+    global mesh_coordinator
     
     # Load environment variables
     db_path = os.getenv("DATABASE_PATH", "local_cache.db")
@@ -328,14 +269,6 @@ def initialize_mesh_coordinator():
     )
     
     print(f"[instapods_hub] MeshSyncCoordinator initialized with device_id: {device_id}")
-    
-    # Initialize AuthManager
-    try:
-        auth_manager = AuthManager(db_path=db_path)
-        print(f"[instapods_hub] AuthManager initialized")
-    except Exception as e:
-        print(f"[instapods_hub] Failed to initialize AuthManager: {e}")
-        print("[instapods_hub] Authentication will use fallback JWT_SECRET check")
 
 
 def main():
