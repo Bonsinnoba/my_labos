@@ -85,7 +85,10 @@ class MeshSyncCoordinator:
         # Registered device IDs for garbage collection
         self.registered_devices = set()
         
-        # Supabase client for mirroring (initialized once at class level)
+        # Cache for B2 object listings to reduce Class C transactions
+        self._cached_cloud_objects = []
+        self._last_cloud_list_time = 0
+        self._cloud_list_cache_duration = 60  # Cache for 60 seconds
         self.supabase_client: Optional[Client] = None
         self.supabase_url = os.getenv("SUPABASE_URL", "")
         self.supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY", "")
@@ -693,8 +696,26 @@ class MeshSyncCoordinator:
             return 0
         
         try:
-            # List objects in bucket
-            response = self.s3_client.list_objects_v2(Bucket=self.b2_bucket_name)
+            # Use cached object list if available and recent (reduces Class C transactions)
+            current_time = time.time()
+            time_since_last_list = current_time - self._last_cloud_list_time
+            
+            if time_since_last_list < self._cloud_list_cache_duration and self._cached_cloud_objects:
+                # Use cached list
+                response = {'Contents': self._cached_cloud_objects}
+                print("[mesh_sync] Using cached B2 object list")
+            else:
+                # List only mesh_tx_ files using prefix filter (reduces Class C transactions)
+                response = self.s3_client.list_objects_v2(
+                    Bucket=self.b2_bucket_name,
+                    Prefix='mesh_tx_'
+                )
+                
+                # Cache the results
+                if 'Contents' in response:
+                    self._cached_cloud_objects = response['Contents']
+                    self._last_cloud_list_time = current_time
+                    print(f"[mesh_sync] Cached {len(self._cached_cloud_objects)} B2 objects for {self._cloud_list_cache_duration}s")
             
             if 'Contents' not in response:
                 print("[mesh_sync] No transactions in cloud")
@@ -712,7 +733,7 @@ class MeshSyncCoordinator:
             for obj in response['Contents']:
                 key = obj['Key']
                 
-                # Skip if not a transaction bundle
+                # Skip if not a transaction bundle (extra safety check)
                 if not key.startswith('mesh_tx_'):
                     continue
                 

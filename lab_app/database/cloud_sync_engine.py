@@ -133,8 +133,6 @@ class DualAccountSyncEngine:
                 region_name='us-east-005'
             )
             
-            # Test connection
-            self.account1_client.list_buckets()
             logger.info("Account #1 boto3 client initialized successfully")
             return True
             
@@ -170,8 +168,6 @@ class DualAccountSyncEngine:
                 region_name='us-east-005'
             )
             
-            # Test connection
-            self.account2_client.list_buckets()
             logger.info("Account #2 boto3 client initialized successfully")
             return True
             
