@@ -28,6 +28,12 @@ import uvicorn
 
 from database.mesh_sync_coordinator import MeshSyncCoordinator
 
+try:
+    import boto3
+    BOTO3_AVAILABLE = True
+except ImportError:
+    BOTO3_AVAILABLE = False
+
 # Security
 security = HTTPBearer()
 JWT_SECRET = os.getenv("JWT_SECRET", "")
@@ -44,6 +50,10 @@ app = FastAPI(
 mesh_coordinator: Optional[MeshSyncCoordinator] = None
 last_sync_timestamp: int = 0
 sync_running = False
+
+# S3 clients for file storage buckets (separate from mesh sync)
+account1_s3_client = None
+account2_s3_client = None
 
 
 def verify_jwt(credentials: HTTPAuthorizationCredentials = Depends(security)) -> bool:
@@ -154,28 +164,21 @@ async def upload_file(
     """
     verify_jwt(credentials)
     
-    if not mesh_coordinator or not mesh_coordinator.s3_client:
-        raise HTTPException(status_code=503, detail="B2 client not available")
+    # Determine which S3 client to use based on file size
+    file_content = await file.read()
+    file_size = len(file_content)
+    
+    if file_size >= 50 * 1024 * 1024:  # 50MB - use Account #1 (Heavy Storage)
+        s3_client = account1_s3_client
+        bucket_name = os.getenv("ACCOUNT_1_BUCKET", "lab-heavy-storage")
+    else:  # < 50MB - use Account #2 (Light Storage)
+        s3_client = account2_s3_client
+        bucket_name = os.getenv("ACCOUNT_2_BUCKET", "lab-light-storage")
+    
+    if not s3_client:
+        raise HTTPException(status_code=503, detail="S3 client not available for this bucket")
     
     try:
-        s3_client = mesh_coordinator.s3_client
-        bucket_name = mesh_coordinator.b2_bucket_name
-        
-        # Read file content
-        file_content = await file.read()
-        
-        # Determine which bucket to use based on file size
-        # If file >= 50MB, use heavy storage bucket; otherwise use light storage
-        file_size = len(file_content)
-        
-        # Get heavy bucket credentials if file is large
-        if file_size >= 50 * 1024 * 1024:  # 50MB
-            heavy_bucket = os.getenv("ACCOUNT_1_BUCKET")
-            if heavy_bucket:
-                bucket_name = heavy_bucket
-                # Note: In production, you'd need to initialize a separate S3 client
-                # for the heavy bucket with its credentials. For now, we use the default.
-        
         # Upload to B2
         s3_client.put_object(
             Bucket=bucket_name,
@@ -247,6 +250,49 @@ def start_background_sync():
     print("[instapods_hub] Background sync loop started (30s interval)")
 
 
+def initialize_file_storage_clients():
+    """Initialize S3 clients for file storage buckets."""
+    global account1_s3_client, account2_s3_client
+    
+    if not BOTO3_AVAILABLE:
+        print("[instapods_hub] boto3 not available - file upload disabled")
+        return
+    
+    # Initialize Account #1 client (Heavy Storage)
+    account1_endpoint = os.getenv("ACCOUNT_1_ENDPOINT")
+    account1_key_id = os.getenv("ACCOUNT_1_KEY_ID")
+    account1_app_key = os.getenv("ACCOUNT_1_APPLICATION_KEY")
+    
+    if account1_key_id and account1_app_key:
+        try:
+            account1_s3_client = boto3.client(
+                's3',
+                endpoint_url=account1_endpoint,
+                aws_access_key_id=account1_key_id,
+                aws_secret_access_key=account1_app_key
+            )
+            print(f"[instapods_hub] Account #1 client initialized")
+        except Exception as e:
+            print(f"[instapods_hub] Failed to initialize Account #1 client: {e}")
+    
+    # Initialize Account #2 client (Light Storage)
+    account2_endpoint = os.getenv("ACCOUNT_2_ENDPOINT")
+    account2_key_id = os.getenv("ACCOUNT_2_KEY_ID")
+    account2_app_key = os.getenv("ACCOUNT_2_APPLICATION_KEY")
+    
+    if account2_key_id and account2_app_key:
+        try:
+            account2_s3_client = boto3.client(
+                's3',
+                endpoint_url=account2_endpoint,
+                aws_access_key_id=account2_key_id,
+                aws_secret_access_key=account2_app_key
+            )
+            print(f"[instapods_hub] Account #2 client initialized")
+        except Exception as e:
+            print(f"[instapods_hub] Failed to initialize Account #2 client: {e}")
+
+
 def initialize_mesh_coordinator():
     """Initialize the MeshSyncCoordinator for Instapods Hub."""
     global mesh_coordinator
@@ -276,6 +322,9 @@ def main():
     print("=" * 60)
     print("Instapods Hub - Always-on Cloud Sync Coordinator")
     print("=" * 60)
+    
+    # Initialize file storage clients
+    initialize_file_storage_clients()
     
     # Initialize mesh coordinator
     initialize_mesh_coordinator()
