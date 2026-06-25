@@ -27,7 +27,7 @@ class MeshSyncCoordinator {
 
   private readonly DEVICE_ID_KEY = '@mesh_device_id';
   private readonly TRANSACTIONS_KEY = '@mesh_transactions';
-  private readonly SYNC_INTERVAL_MS = 10000; // 10 seconds
+  private readonly SYNC_INTERVAL_MS = 3600000; // 1 hour (save-driven sync, low B2 pressure)
 
   constructor() {
     this.initialize();
@@ -66,7 +66,7 @@ class MeshSyncCoordinator {
       this.notifyListeners({ isOnline, isSyncing: this.isSyncing, lastSync: null, pendingTransactions: 0 });
       
       if (isOnline && !this.isSyncing) {
-        this.sync();
+        this.sync().catch(err => console.error('Error during network-change sync:', err));
       }
     });
   }
@@ -130,6 +130,12 @@ class MeshSyncCoordinator {
         lastSync: null,
         pendingTransactions: transactions.length,
       });
+
+      // Trigger sync immediately on save/mutation
+      const isOnline = await this.isNetworkAvailable();
+      if (isOnline) {
+        this.sync().catch(err => console.error('Error during auto-sync:', err));
+      }
     } catch (error) {
       console.error('Error logging mutation:', error);
     }

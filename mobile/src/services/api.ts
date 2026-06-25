@@ -1,4 +1,5 @@
 import supabase from './supabase'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 
 const INSTAPODS_URL = process.env.EXPO_PUBLIC_INSTAPODS_URL || ''
 

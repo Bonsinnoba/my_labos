@@ -343,7 +343,8 @@ def initialize_mesh_coordinator():
         b2_bucket_name=b2_bucket_name,
         b2_endpoint_url=b2_endpoint_url,
         b2_access_key_id=b2_access_key_id,
-        b2_secret_access_key=b2_secret_access_key
+        b2_secret_access_key=b2_secret_access_key,
+        hub_mode=True  # Hub is the sole B2 poller; devices pull from Supabase
     )
     
     print(f"[instapods_hub] MeshSyncCoordinator initialized with device_id: {device_id}")

@@ -55,7 +55,8 @@ class MeshSyncCoordinator:
                  b2_bucket_name: Optional[str] = None,
                  b2_endpoint_url: Optional[str] = None,
                  b2_access_key_id: Optional[str] = None,
-                 b2_secret_access_key: Optional[str] = None):
+                 b2_secret_access_key: Optional[str] = None,
+                 hub_mode: bool = False):
         """
         Initialize the Mesh Sync Coordinator.
         
@@ -67,6 +68,9 @@ class MeshSyncCoordinator:
             b2_endpoint_url: Backblaze B2 endpoint URL
             b2_access_key_id: Backblaze B2 access key ID
             b2_secret_access_key: Backblaze B2 secret access key
+            hub_mode: If True, this instance is the sole B2 poller (Instapods Hub).
+                      If False (device mode), incoming transactions are pulled from
+                      Supabase instead of B2 to eliminate redundant Class C API calls.
         """
         self.db_path = db_path
         self.device_id = device_id or self._get_or_generate_device_id()
@@ -74,25 +78,35 @@ class MeshSyncCoordinator:
         self.b2_endpoint_url = b2_endpoint_url
         self.b2_access_key_id = b2_access_key_id
         self.b2_secret_access_key = b2_secret_access_key
+
+        # Hub mode: when True this instance is the sole B2 poller.
+        # Non-hub devices pull from Supabase instead to eliminate redundant B2 Class C calls.
+        self.hub_mode = hub_mode
         
         self.conn: Optional[sqlite3.Connection] = None
         self.s3_client = None
         self.is_online = True
         self.sync_thread = None
         self.sync_running = False
-        self.polling_interval = 7.5  # seconds (between 5-10 as specified)
+
+        # Poll interval: configurable via MESH_POLL_INTERVAL env var.
+        # Hub default: 7.5s for fast fan-out. Device default: 30s (Supabase pull is cheaper).
+        default_interval = 7.5 if hub_mode else 30.0
+        self.polling_interval = float(os.getenv("MESH_POLL_INTERVAL", str(default_interval)))
         
         # Registered device IDs for garbage collection
         self.registered_devices = set()
         
-        # Cache for B2 object listings to reduce Class C transactions
+        # Cache for B2 object listings to reduce Class C transactions.
+        # Extended to 300s — a single Hub poller makes list caching much less critical,
+        # but retained as a safety net for burst scenarios.
         self._cached_cloud_objects = []
         self._last_cloud_list_time = 0
-        self._cloud_list_cache_duration = 60  # Cache for 60 seconds
+        self._cloud_list_cache_duration = 300  # Cache for 300 seconds (was 60s)
         
         # Cache for downloaded transaction bundles to reduce Class B transactions
         self._download_cache = {}  # key: bundle filename, value: decompressed bundle data
-        self._download_cache_max_size = 100  # Max number of bundles to cache
+        self._download_cache_max_size = 200  # Max number of bundles to cache (was 100)
         self._download_cache_hits = 0
         self._download_cache_misses = 0
         self.supabase_client: Optional[Client] = None
@@ -120,6 +134,9 @@ class MeshSyncCoordinator:
             self._init_supabase_client()
         else:
             print("[mesh_sync] Supabase credentials not provided or supabase not available - mirroring disabled")
+
+        mode_label = "HUB (sole B2 poller)" if hub_mode else f"DEVICE (Supabase pull, poll={self.polling_interval}s)"
+        print(f"[mesh_sync] Mode: {mode_label}")
     
     def _get_or_generate_device_id(self) -> str:
         """
@@ -283,6 +300,7 @@ class MeshSyncCoordinator:
             return
         
         try:
+            # 1. Mirror the actual data records to their respective tables
             for tx in transactions:
                 table_name = tx['table_name']
                 operation = tx['operation']
@@ -312,9 +330,109 @@ class MeshSyncCoordinator:
                         print(f"[mesh_sync] Mirrored soft DELETE to Supabase: {table_name} id={record_id}")
                     except Exception as e:
                         print(f"[mesh_sync] Warning: Failed to mirror DELETE to {table_name}: {e}")
+            
+            # 2. Mirror the transaction ledger entries to mesh_transactions table
+            supabase_ledger_rows = []
+            for tx in transactions:
+                # Convert timestamp from milliseconds to seconds for 32-bit Postgres int limit
+                ts_seconds = int(tx['timestamp'] / 1000)
+                
+                payload_val = tx['payload']
+                if not isinstance(payload_val, str):
+                    payload_val = json.dumps(payload_val)
+                
+                supabase_ledger_rows.append({
+                    'tx_id': tx['tx_id'],
+                    'table_name': tx['table_name'],
+                    'operation': tx['operation'],
+                    'payload': payload_val,
+                    'timestamp': ts_seconds,
+                    'device_origin': tx['device_origin']
+                })
+            
+            if supabase_ledger_rows:
+                try:
+                    self.supabase_client.table('mesh_transactions').upsert(supabase_ledger_rows).execute()
+                    print(f"[mesh_sync] Mirrored {len(supabase_ledger_rows)} ledger rows to Supabase")
+                except Exception as e:
+                    print(f"[mesh_sync] Warning: Failed to mirror ledger rows to Supabase: {e}")
         
         except Exception as e:
             print(f"[mesh_sync] Warning: Supabase mirroring error (non-fatal): {e}")
+
+    def pull_from_supabase(self) -> int:
+        """
+        Pull and apply transactions from Supabase (device mode, no B2 Class C cost).
+
+        Queries the Supabase mesh_transactions table for rows written by other devices
+        since this device's last known timestamp. Falls back to pull_from_cloud() if
+        Supabase is unreachable.
+
+        Returns:
+            Number of transactions applied
+        """
+        if not self.supabase_client:
+            print("[mesh_sync] Supabase unavailable for pull - falling back to B2")
+            return self.pull_from_cloud()
+
+        if not self.is_online:
+            print("[mesh_sync] Offline - skipping Supabase pull")
+            return 0
+
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT MAX(timestamp) as max_ts FROM mesh_transactions")
+            result = cursor.fetchone()
+            last_timestamp = result['max_ts'] if result['max_ts'] else 0
+
+            # Convert millisecond timestamp to seconds for 32-bit integer comparison in Supabase
+            last_ts_seconds = int(last_timestamp / 1000)
+
+            query = (
+                self.supabase_client
+                .table('mesh_transactions')
+                .select('*')
+                .neq('device_origin', self.device_id)  # Ignore our own transactions
+                .order('timestamp', desc=False)
+            )
+
+            if last_ts_seconds > 0:
+                query = query.gt('timestamp', last_ts_seconds)
+
+            response = query.limit(500).execute()
+
+            if not response.data:
+                print("[mesh_sync] No new transactions in Supabase")
+                return 0
+
+            # Preprocess response data to match local SQLite format requirements
+            transactions = []
+            for tx in response.data:
+                processed_tx = tx.copy()
+                
+                # Convert timestamp from seconds back to milliseconds
+                processed_tx['timestamp'] = int(tx['timestamp'] * 1000)
+                
+                # Deserialize payload if it's a JSON string
+                if isinstance(tx.get('payload'), str):
+                    try:
+                        processed_tx['payload'] = json.loads(tx['payload'])
+                    except Exception as parse_err:
+                        print(f"[mesh_sync] Error parsing payload for tx {tx.get('tx_id')}: {parse_err}")
+                        continue
+                
+                transactions.append(processed_tx)
+
+            if not transactions:
+                return 0
+
+            applied = self.apply_incoming_transactions(transactions)
+            print(f"[mesh_sync] Applied {applied} transactions from Supabase (device pull)")
+            return applied
+
+        except Exception as e:
+            print(f"[mesh_sync] Supabase pull error ({e}) - falling back to B2")
+            return self.pull_from_cloud()
     
     def _pull_mobile_notes(self) -> int:
         """
@@ -842,13 +960,20 @@ class MeshSyncCoordinator:
                 self._keep_supabase_alive()
                 
                 if self.is_online:
-                    # Pull from cloud first
-                    self.pull_from_cloud()
-                    
-                    # Pull mobile notes from Supabase
+                    if self.hub_mode:
+                        # HUB MODE: sole B2 poller — pull from B2 and mirror to Supabase
+                        pulled = self.pull_from_cloud()
+                        if pulled > 0:
+                            # Mirror freshly pulled transactions to Supabase so devices can read them
+                            pending = self.get_pending_transactions()
+                            if pending:
+                                self._mirror_to_supabase(pending)
+                    else:
+                        # DEVICE MODE: pull from Supabase (zero B2 Class C cost)
+                        self.pull_from_supabase()
+
+                    # Both modes: pull mobile notes and push local mutations to B2
                     self._pull_mobile_notes()
-                    
-                    # Then push to cloud
                     self.push_to_cloud()
                 else:
                     print("[mesh_sync] Offline - transactions queued locally")

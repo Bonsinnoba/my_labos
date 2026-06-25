@@ -26,10 +26,10 @@ export class SyncService {
   async getSyncConfig(): Promise<SyncConfig> {
     try {
       const config = await AsyncStorage.getItem('@sync_config');
-      return config ? JSON.parse(config) : { enabled: true, interval: 7500, lastSync: null };
+      return config ? JSON.parse(config) : { enabled: false, interval: 3600000, lastSync: null };
     } catch (error) {
       console.error('Error getting sync config:', error);
-      return { enabled: true, interval: 7500, lastSync: null };
+      return { enabled: false, interval: 3600000, lastSync: null };
     }
   }
 
