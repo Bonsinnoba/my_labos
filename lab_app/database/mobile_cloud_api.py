@@ -239,12 +239,13 @@ class MobileCloudAPI:
             if file_size >= size_threshold:
                 # Heavy storage bucket
                 bucket = os.getenv("ACCOUNT_1_BUCKET", "lab-heavy-storage")
+                endpoint = os.getenv("ACCOUNT_1_ENDPOINT", self.b2_endpoint_url)
             else:
                 # Light storage bucket
                 bucket = os.getenv("ACCOUNT_2_BUCKET", "lab-light-storage")
+                endpoint = os.getenv("ACCOUNT_2_ENDPOINT", self.b2_endpoint_url)
             
             # Construct public URL
-            endpoint = self.b2_endpoint_url
             url = f"{endpoint}/{bucket}/{file_name}"
             
             return url

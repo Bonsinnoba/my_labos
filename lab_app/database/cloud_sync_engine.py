@@ -512,7 +512,7 @@ class DualAccountSyncEngine:
     
     def _delete_from_cloud(self, file_name: str, file_size: int = None) -> bool:
         """
-        Delete a file from cloud storage (target account only based on file size).
+        Delete a file from cloud storage (target account only based on file size, or both if size unknown).
         
         Args:
             file_name: Name of the file to delete
@@ -521,37 +521,47 @@ class DualAccountSyncEngine:
         Returns:
             True if deletion successful
         """
-        # Determine target account based on file size
-        if file_size is not None and file_size >= self.size_threshold_bytes:
-            # File belongs to Account #1 (Heavy Storage)
-            target_client = self.account1_client
-            target_bucket = self.config["ACCOUNT_1_BUCKET"]
-            account_name = "Account #1"
-            logger.info(f"Large file ({file_size / 1024 / 1024:.2f} MB), targeting Account #1 (Heavy Storage)")
-        else:
-            # File belongs to Account #2 (Light Storage)
-            target_client = self.account2_client
-            target_bucket = self.config["ACCOUNT_2_BUCKET"]
-            account_name = "Account #2"
-            if file_size is not None:
-                logger.info(f"Small file ({file_size / 1024 / 1024:.2f} MB), targeting Account #2 (Light Storage)")
+        targets = []
+        
+        # Determine target accounts based on file size
+        if file_size is not None:
+            if file_size >= self.size_threshold_bytes:
+                targets.append((self.account1_client, self.config["ACCOUNT_1_BUCKET"], "Account #1 (Heavy)"))
             else:
-                logger.info(f"Small file (size unknown), targeting Account #2 (Light Storage)")
+                targets.append((self.account2_client, self.config["ACCOUNT_2_BUCKET"], "Account #2 (Light)"))
+        else:
+            logger.info(f"File size unknown for {file_name}. Attempting deletion from both Account #1 and Account #2 buckets.")
+            if self.account1_client:
+                targets.append((self.account1_client, self.config["ACCOUNT_1_BUCKET"], "Account #1 (Heavy)"))
+            if self.account2_client:
+                targets.append((self.account2_client, self.config["ACCOUNT_2_BUCKET"], "Account #2 (Light)"))
         
-        if not target_client:
-            logger.error(f"{account_name} client not initialized - cannot delete {file_name}")
+        if not targets:
+            logger.error(f"No initialized cloud storage clients available for deleting {file_name}")
             return False
-        
-        try:
-            target_client.delete_object(Bucket=target_bucket, Key=file_name)
-            logger.info(f"Successfully deleted {file_name} from {account_name}")
-            return True
-        except target_client.exceptions.NoSuchKey:
-            logger.warning(f"File not found in {account_name}: {file_name} (may already be deleted)")
-            return True  # Consider it successful if already deleted
-        except Exception as e:
-            logger.error(f"Failed to delete {file_name} from {account_name}: {e}")
-            return False
+            
+        success = True
+        for client, bucket, account_name in targets:
+            if not client:
+                logger.error(f"{account_name} client not initialized - cannot delete {file_name}")
+                success = False
+                continue
+                
+            keys_to_delete = [file_name]
+            if not file_name.endswith('.enc') and not file_name.endswith('.gz'):
+                keys_to_delete.extend([f"{file_name}.enc", f"{file_name}.gz"])
+                
+            for key in keys_to_delete:
+                try:
+                    client.delete_object(Bucket=bucket, Key=key)
+                    logger.info(f"Successfully requested deletion of '{key}' from {account_name} bucket '{bucket}'")
+                except client.exceptions.NoSuchKey:
+                    logger.warning(f"File '{key}' not found in {account_name} bucket '{bucket}' (may already be deleted)")
+                except Exception as e:
+                    logger.error(f"Failed to delete '{key}' from {account_name} bucket '{bucket}': {e}")
+                    success = False
+                    
+        return success
     
     def _clear_deletion_log(self, db_path: str, log_id: int) -> bool:
         """

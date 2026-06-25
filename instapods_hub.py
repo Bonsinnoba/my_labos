@@ -101,15 +101,17 @@ async def health_check():
 @app.get("/signed-url")
 async def get_signed_url(
     filename: str = Query(..., description="Filename to generate signed URL for"),
+    file_size: Optional[int] = Query(None, description="File size in bytes (optional)"),
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
-    Generate a time-limited B2 signed URL for file access.
+    Generate a time-limited B2 signed URL for file access from the correct storage bucket.
     
     Requires Bearer JWT authentication.
     
     Args:
         filename: The filename to generate a signed URL for
+        file_size: Optional file size in bytes to determine storage bucket routing
         credentials: JWT credentials
         
     Returns:
@@ -117,16 +119,46 @@ async def get_signed_url(
     """
     verify_jwt(credentials)
     
-    if not mesh_coordinator or not mesh_coordinator.s3_client:
-        raise HTTPException(status_code=503, detail="B2 client not available")
+    # Look up file_size in database if not provided
+    if file_size is None and mesh_coordinator and mesh_coordinator.db_path:
+        try:
+            import sqlite3
+            conn = sqlite3.connect(mesh_coordinator.db_path)
+            cursor = conn.cursor()
+            
+            # Clean suffix to match original database path
+            clean_filename = filename
+            if filename.endswith('.enc'):
+                clean_filename = filename[:-4]
+            elif filename.endswith('.gz'):
+                clean_filename = filename[:-3]
+                
+            cursor.execute("""
+                SELECT file_size FROM knowledge_vault 
+                WHERE file_path LIKE '%' || ? OR file_path LIKE '%' || ?
+            """, (filename, clean_filename))
+            row = cursor.fetchone()
+            if row:
+                file_size = row[0]
+            conn.close()
+        except Exception as db_err:
+            print(f"[instapods_hub] DB lookup error for {filename}: {db_err}")
+    
+    # Determine client and bucket based on file size (50MB threshold)
+    if file_size is not None and file_size >= 50 * 1024 * 1024:
+        s3_client = account1_s3_client
+        bucket_name = os.getenv("ACCOUNT_1_BUCKET", "lab-heavy-storage")
+        account_label = "Account #1"
+    else:
+        s3_client = account2_s3_client
+        bucket_name = os.getenv("ACCOUNT_2_BUCKET", "lab-light-storage")
+        account_label = "Account #2"
+        
+    if not s3_client:
+        raise HTTPException(status_code=503, detail=f"B2 client for {account_label} not initialized")
     
     try:
         # Generate signed URL with 3600 second expiry
-        s3_client = mesh_coordinator.s3_client
-        bucket_name = mesh_coordinator.b2_bucket_name
-        
-        # Determine which bucket to use based on file size (if known)
-        # For now, use the configured bucket
         signed_url = s3_client.generate_presigned_url(
             'get_object',
             Params={'Bucket': bucket_name, 'Key': filename},

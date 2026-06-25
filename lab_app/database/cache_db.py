@@ -2259,8 +2259,12 @@ class CacheDatabase:
         """Delete a document."""
         try:
             cursor = self.conn.cursor()
-            cursor.execute("DELETE FROM knowledge_vault WHERE id = ?", (doc_id,))
+            cursor.execute("UPDATE knowledge_vault SET is_tombstone = 1 WHERE id = ?", (doc_id,))
             self.conn.commit()
+            
+            # Log mutation for mesh sync
+            self._log_mutation('knowledge_vault', 'UPDATE', {'id': doc_id, 'is_tombstone': 1}, doc_id)
+            
             return cursor.rowcount > 0
         except sqlite3.Error as e:
             print(f"Error deleting document: {e}")
