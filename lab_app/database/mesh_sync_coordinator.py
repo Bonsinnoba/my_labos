@@ -89,6 +89,12 @@ class MeshSyncCoordinator:
         self._cached_cloud_objects = []
         self._last_cloud_list_time = 0
         self._cloud_list_cache_duration = 60  # Cache for 60 seconds
+        
+        # Cache for downloaded transaction bundles to reduce Class B transactions
+        self._download_cache = {}  # key: bundle filename, value: decompressed bundle data
+        self._download_cache_max_size = 100  # Max number of bundles to cache
+        self._download_cache_hits = 0
+        self._download_cache_misses = 0
         self.supabase_client: Optional[Client] = None
         self.supabase_url = os.getenv("SUPABASE_URL", "")
         self.supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY", "")
@@ -748,11 +754,28 @@ class MeshSyncCoordinator:
                 except (ValueError, IndexError):
                     continue
                 
-                # Download and decompress bundle
-                obj_response = self.s3_client.get_object(Bucket=self.b2_bucket_name, Key=key)
-                compressed_data = obj_response['Body'].read()
-                json_data = gzip.decompress(compressed_data).decode()
-                bundle = json.loads(json_data)
+                # Download and decompress bundle (with caching to reduce Class B transactions)
+                if key in self._download_cache:
+                    # Cache hit - use cached data
+                    bundle = self._download_cache[key]
+                    self._download_cache_hits += 1
+                    print(f"[mesh_sync] Download cache hit for {key}")
+                else:
+                    # Cache miss - download from B2
+                    obj_response = self.s3_client.get_object(Bucket=self.b2_bucket_name, Key=key)
+                    compressed_data = obj_response['Body'].read()
+                    json_data = gzip.decompress(compressed_data).decode()
+                    bundle = json.loads(json_data)
+                    self._download_cache_misses += 1
+                    
+                    # Add to cache (evict oldest if cache is full)
+                    if len(self._download_cache) >= self._download_cache_max_size:
+                        # Remove oldest entry (FIFO)
+                        oldest_key = next(iter(self._download_cache))
+                        del self._download_cache[oldest_key]
+                    
+                    self._download_cache[key] = bundle
+                    print(f"[mesh_sync] Download cache miss for {key} (hits: {self._download_cache_hits}, misses: {self._download_cache_misses})")
                 
                 # Skip transactions from this device (we already have them)
                 if bundle.get('device_id') == self.device_id:

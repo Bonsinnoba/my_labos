@@ -271,30 +271,45 @@ class DualAccountSyncEngine:
         try:
             bucket_name = self.config["ACCOUNT_1_BUCKET"]
             
+            # Determine final filename based on encryption
+            final_file_name = file_name
+            if self.secure_vault:
+                final_file_name = f"{file_name}.enc"
+            else:
+                final_file_name = f"{file_name}.gz"
+            
+            # Check if file already exists to avoid redundant upload (Class A optimization)
+            try:
+                self.account1_client.head_object(Bucket=bucket_name, Key=final_file_name)
+                logger.info(f"File {final_file_name} already exists in Account #1, skipping upload")
+                public_url = f"{self.config['ACCOUNT_1_ENDPOINT']}/{bucket_name}/{final_file_name}"
+                return public_url
+            except self.account1_client.exceptions.NoSuchKey:
+                # File doesn't exist, proceed with upload
+                pass
+            
             logger.info(f"Uploading {file_name} to Account #1 (Heavy Storage)")
             
             # Encrypt file if encryption is enabled
             if self.secure_vault:
                 logger.info("Encrypting and compressing file before upload")
                 encrypted_content = self.secure_vault.encrypt_file(file_path)
-                file_name = f"{file_name}.enc"
                 
                 # Upload encrypted content using BytesIO
                 self.account1_client.upload_fileobj(
                     BytesIO(encrypted_content),
                     Bucket=bucket_name,
-                    Key=file_name
+                    Key=final_file_name
                 )
             else:
                 # Compress file even without encryption
                 logger.info("Compressing file before upload (encryption disabled)")
                 compressed_content = self._compress_file(file_path)
                 if compressed_content:
-                    file_name = f"{file_name}.gz"
                     self.account1_client.upload_fileobj(
                         compressed_content,
                         Bucket=bucket_name,
-                        Key=file_name
+                        Key=final_file_name
                     )
                 else:
                     # Upload original file if compression fails
@@ -304,9 +319,10 @@ class DualAccountSyncEngine:
                         Bucket=bucket_name,
                         Key=file_name
                     )
+                    final_file_name = file_name
             
             # Construct public URL
-            public_url = f"{self.config['ACCOUNT_1_ENDPOINT']}/{bucket_name}/{file_name}"
+            public_url = f"{self.config['ACCOUNT_1_ENDPOINT']}/{bucket_name}/{final_file_name}"
             logger.info(f"Successfully uploaded to Account #1: {public_url}")
             
             return public_url
@@ -333,30 +349,45 @@ class DualAccountSyncEngine:
         try:
             bucket_name = self.config["ACCOUNT_2_BUCKET"]
             
+            # Determine final filename based on encryption
+            final_file_name = file_name
+            if self.secure_vault:
+                final_file_name = f"{file_name}.enc"
+            else:
+                final_file_name = f"{file_name}.gz"
+            
+            # Check if file already exists to avoid redundant upload (Class A optimization)
+            try:
+                self.account2_client.head_object(Bucket=bucket_name, Key=final_file_name)
+                logger.info(f"File {final_file_name} already exists in Account #2, skipping upload")
+                public_url = f"{self.config['ACCOUNT_2_ENDPOINT']}/{bucket_name}/{final_file_name}"
+                return public_url
+            except self.account2_client.exceptions.NoSuchKey:
+                # File doesn't exist, proceed with upload
+                pass
+            
             logger.info(f"Uploading {file_name} to Account #2 (Light Storage)")
             
             # Encrypt file if encryption is enabled
             if self.secure_vault:
                 logger.info("Encrypting and compressing file before upload")
                 encrypted_content = self.secure_vault.encrypt_file(file_path)
-                file_name = f"{file_name}.enc"
                 
                 # Upload encrypted content using BytesIO
                 self.account2_client.upload_fileobj(
                     BytesIO(encrypted_content),
                     Bucket=bucket_name,
-                    Key=file_name
+                    Key=final_file_name
                 )
             else:
                 # Compress file even without encryption
                 logger.info("Compressing file before upload (encryption disabled)")
                 compressed_content = self._compress_file(file_path)
                 if compressed_content:
-                    file_name = f"{file_name}.gz"
                     self.account2_client.upload_fileobj(
                         compressed_content,
                         Bucket=bucket_name,
-                        Key=file_name
+                        Key=final_file_name
                     )
                 else:
                     # Upload original file if compression fails
@@ -366,9 +397,10 @@ class DualAccountSyncEngine:
                         Bucket=bucket_name,
                         Key=file_name
                     )
+                    final_file_name = file_name
             
             # Construct public URL
-            public_url = f"{self.config['ACCOUNT_2_ENDPOINT']}/{bucket_name}/{file_name}"
+            public_url = f"{self.config['ACCOUNT_2_ENDPOINT']}/{bucket_name}/{final_file_name}"
             logger.info(f"Successfully uploaded to Account #2: {public_url}")
             
             return public_url
