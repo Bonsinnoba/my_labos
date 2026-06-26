@@ -33,7 +33,7 @@ class AuditLogger:
         self.db_path = db_path
         self._initialize_database()
         
-        print("✅ AuditLogger initialized")
+        print("[OK] AuditLogger initialized")
     
     def _initialize_database(self) -> None:
         """Initialize audit logging tables."""
@@ -70,10 +70,10 @@ class AuditLogger:
             conn.commit()
             conn.close()
             
-            print("✅ Audit logging database initialized")
+            print("[OK] Audit logging database initialized")
             
         except sqlite3.Error as e:
-            print(f"❌ Failed to initialize audit database: {e}")
+            print(f"[ERR] Failed to initialize audit database: {e}")
     
     def log_action(self, action: str, table_name: str, record_id: int,
                    user_id: Optional[str] = None, device_id: Optional[str] = None,
@@ -104,10 +104,10 @@ class AuditLogger:
             conn.commit()
             conn.close()
             
-            print(f"📝 Audit: {action} on {table_name}:{record_id} by {personnel_name or device_id or user_id}")
+            print(f"[LOG] Audit: {action} on {table_name}:{record_id} by {personnel_name or device_id or user_id}")
             
         except sqlite3.Error as e:
-            print(f"❌ Failed to log audit: {e}")
+            print(f"[ERR] Failed to log audit: {e}")
     
     def get_audit_trail(self, table_name: Optional[str] = None, 
                       record_id: Optional[int] = None,
@@ -172,7 +172,7 @@ class AuditLogger:
             return audit_trail
             
         except sqlite3.Error as e:
-            print(f"❌ Failed to get audit trail: {e}")
+            print(f"[ERR] Failed to get audit trail: {e}")
             return []
     
     def get_who_created(self, table_name: str, record_id: int) -> Optional[Dict[str, Any]]:
@@ -213,7 +213,7 @@ class AuditLogger:
             return None
             
         except sqlite3.Error as e:
-            print(f"❌ Failed to get creator info: {e}")
+            print(f"[ERR] Failed to get creator info: {e}")
             return None
     
     def get_who_edited(self, table_name: str, record_id: int) -> List[Dict[str, Any]]:
@@ -255,7 +255,7 @@ class AuditLogger:
             return edits
             
         except sqlite3.Error as e:
-            print(f"❌ Failed to get edit info: {e}")
+            print(f"[ERR] Failed to get edit info: {e}")
             return []
 
 
@@ -309,4 +309,4 @@ if __name__ == "__main__":
     for edit in edits:
         print(f"   Edited by: {edit['personnel_name']} at {edit['edited_at']}")
     
-    print("\n✅ All audit logger tests completed!")
+    print("\n[OK] All audit logger tests completed!")

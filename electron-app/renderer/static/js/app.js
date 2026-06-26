@@ -1,39 +1,75 @@
 // Centralized fetch wrapper with global error handling
-console.log('app.js loaded v19');
+console.log('app.js loaded v20');
+
+/**
+ * Wait for the Python backend to become available.
+ * Polls /api/dashboard every 1 second for up to 20 seconds.
+ * Resolves immediately once the server responds, or after the timeout.
+ */
+async function waitForBackend(maxWaitMs = 20000) {
+    const fetchFn = window.electronAPI && window.electronAPI.apiFetch
+        ? window.electronAPI.apiFetch
+        : fetch;
+    const deadline = Date.now() + maxWaitMs;
+    while (Date.now() < deadline) {
+        try {
+            await fetchFn('/api/dashboard', { skipErrorAlert: true });
+            console.log('[backend] Server is ready');
+            return;
+        } catch (e) {
+            await new Promise(r => setTimeout(r, 1000));
+        }
+    }
+    console.warn('[backend] Server did not become ready within', maxWaitMs, 'ms');
+}
+
 async function apiFetch(url, options = {}) {
     const skipAlert = options.skipErrorAlert || false;
-    try {
-        // Use electronAPI.apiFetch if available (Electron context) to bypass CORS
-        const fetchFn = window.electronAPI && window.electronAPI.apiFetch ? window.electronAPI.apiFetch : fetch;
-        const response = await fetchFn(url, options);
-        if (!response.ok) {
-            let errorText = `HTTP Error ${response.status}: ${response.statusText}`;
-            try {
-                const clonedResponse = response.clone();
-                const data = await clonedResponse.json();
-                if (data && data.detail) {
-                    errorText = (typeof data.detail === 'string') ? data.detail : JSON.stringify(data.detail);
-                } else if (data && data.message) {
-                    errorText = (typeof data.message === 'string') ? data.message : JSON.stringify(data.message);
-                }
-            } catch (e) {}
-            if (!skipAlert) showAlert(errorText, 'Error');
-            // Tag as an HTTP error so the catch block won't double-alert
-            const httpErr = new Error(errorText);
-            httpErr._isHttpError = true;
-            throw httpErr;
+    const retries  = (typeof options.retries === 'number') ? options.retries : 0;
+
+    let attempt = 0;
+    while (true) {
+        try {
+            // Use electronAPI.apiFetch if available (Electron context) to bypass CORS
+            const fetchFn = window.electronAPI && window.electronAPI.apiFetch ? window.electronAPI.apiFetch : fetch;
+            const response = await fetchFn(url, options);
+            if (!response.ok) {
+                let errorText = `HTTP Error ${response.status}: ${response.statusText}`;
+                try {
+                    const clonedResponse = response.clone();
+                    const data = await clonedResponse.json();
+                    if (data && data.detail) {
+                        errorText = (typeof data.detail === 'string') ? data.detail : JSON.stringify(data.detail);
+                    } else if (data && data.message) {
+                        errorText = (typeof data.message === 'string') ? data.message : JSON.stringify(data.message);
+                    }
+                } catch (e) {}
+                if (!skipAlert) showAlert(errorText, 'Error');
+                // Tag as an HTTP error so the catch block won't double-alert
+                const httpErr = new Error(errorText);
+                httpErr._isHttpError = true;
+                throw httpErr;
+            }
+            return response;
+        } catch (err) {
+            // Retry on network/connection errors (TypeError) if retries remain
+            if (!err._isHttpError && attempt < retries) {
+                attempt++;
+                console.warn(`apiFetch: retrying [${url}] attempt ${attempt}/${retries}...`);
+                await new Promise(r => setTimeout(r, 1000 * attempt));
+                continue;
+            }
+            // Only alert for genuine network failures (TypeError), not HTTP errors above
+            if (!skipAlert && err instanceof TypeError && !err._isHttpError) {
+                showAlert('Cannot connect to the backend server. Please verify it is running.', 'Connection Error');
+            }
+            // Log full error object so we can see structured API error details
+            console.error('apiFetch error [' + url + ']:', err);
+            throw err;
         }
-        return response;
-    } catch (err) {
-        // Only alert for genuine network failures (TypeError), not HTTP errors above
-        if (!skipAlert && err instanceof TypeError) {
-            showAlert('Cannot connect to the backend server. Please verify it is running.', 'Connection Error');
-        }
-        // Log full error object so we can see structured API error details
-        console.error('apiFetch error [' + url + ']:', err);
-        throw err;
     }
 }
+
 
 // Escape HTML to avoid injection in generated innerHTML
 function escapeHtml(str) {
@@ -10295,11 +10331,13 @@ async function submitTrackingForm() {
     }
 }
 
-// Initialize tracking when page loads
-document.addEventListener('DOMContentLoaded', () => {
+// Initialize tracking when page loads — wait for backend to be ready first
+document.addEventListener('DOMContentLoaded', async () => {
+    await waitForBackend(20000);
     initTracking();
     initFinance();
 });
+
 
 // Finance tracking functionality
 let currentFinanceTab = 'overview';
@@ -10347,10 +10385,10 @@ async function loadFinanceOverview() {
     try {
         // Fetch all finance data
         const [sourcesRes, gainsRes, purchasesRes, maintenanceRes] = await Promise.all([
-            fetch('/api/funding-sources'),
-            fetch('/api/gains'),
-            fetch('/api/purchases'),
-            fetch('/api/maintenance-costs')
+            apiFetch('/api/funding-sources'),
+            apiFetch('/api/gains'),
+            apiFetch('/api/purchases'),
+            apiFetch('/api/maintenance-costs')
         ]);
         
         const sources = (await sourcesRes.json()).data || [];
@@ -10676,7 +10714,7 @@ async function openAddFundingSourceModal() {
         return;
     }
 
-    fetch('/api/funding-sources', {
+    apiFetch('/api/funding-sources', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -10751,7 +10789,7 @@ function saveGain() {
         return;
     }
 
-    fetch('/api/gains', {
+    apiFetch('/api/gains', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -10838,7 +10876,7 @@ function savePurchase() {
         return;
     }
 
-    fetch('/api/purchases', {
+    apiFetch('/api/purchases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -10928,7 +10966,7 @@ function saveMaintenance() {
         return;
     }
 
-    fetch('/api/maintenance-costs', {
+    apiFetch('/api/maintenance-costs', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -10961,7 +10999,7 @@ function saveMaintenance() {
 }
 
 function loadFundingSourcesIntoSelect(selectId) {
-    fetch('/api/funding-sources')
+    apiFetch('/api/funding-sources')
         .then(res => res.json())
         .then(data => {
             if (data.success) {
@@ -10980,7 +11018,7 @@ function loadFundingSourcesIntoSelect(selectId) {
 async function deleteFundingSource(id) {
     if (!(await showConfirm('Are you sure you want to delete this funding source?', 'Delete Funding Source'))) return;
 
-    fetch(`/api/funding-sources/${id}`, { method: 'DELETE' })
+    apiFetch(`/api/funding-sources/${id}`, { method: 'DELETE' })
         .then(res => res.json())
         .then(data => {
             if (data.success) {
@@ -10999,7 +11037,7 @@ async function deleteFundingSource(id) {
 async function deletePurchase(id) {
     if (!(await showConfirm('Are you sure you want to delete this purchase?', 'Delete Purchase'))) return;
 
-    fetch(`/api/purchases/${id}`, { method: 'DELETE' })
+    apiFetch(`/api/purchases/${id}`, { method: 'DELETE' })
         .then(res => res.json())
         .then(data => {
             if (data.success) {
@@ -11018,7 +11056,7 @@ async function deletePurchase(id) {
 async function deleteMaintenanceCost(id) {
     if (!(await showConfirm('Are you sure you want to delete this maintenance cost?', 'Delete Maintenance Cost'))) return;
 
-    fetch(`/api/maintenance-costs/${id}`, { method: 'DELETE' })
+    apiFetch(`/api/maintenance-costs/${id}`, { method: 'DELETE' })
         .then(res => res.json())
         .then(data => {
             if (data.success) {
@@ -11037,7 +11075,7 @@ async function deleteMaintenanceCost(id) {
 async function deleteGain(id) {
     if (!(await showConfirm('Are you sure you want to delete this gain?', 'Delete Gain'))) return;
 
-    fetch(`/api/gains/${id}`, { method: 'DELETE' })
+    apiFetch(`/api/gains/${id}`, { method: 'DELETE' })
         .then(res => res.json())
         .then(data => {
             if (data.success) {
@@ -11078,8 +11116,10 @@ document.getElementById('global-search-input').addEventListener('keypress', (e) 
     }
 });
 
-// Initialize dashboard on load
-document.addEventListener('DOMContentLoaded', () => {
+// Initialize dashboard on load — wait for backend to be ready first
+document.addEventListener('DOMContentLoaded', async () => {
+    await waitForBackend(20000);
     loadDashboard();
     loadChatHistory();
 });
+

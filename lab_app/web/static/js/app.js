@@ -10358,10 +10358,10 @@ async function loadFinanceOverview() {
     try {
         // Fetch all finance data
         const [sourcesRes, gainsRes, purchasesRes, maintenanceRes] = await Promise.all([
-            fetch('/api/funding-sources'),
-            fetch('/api/gains'),
-            fetch('/api/purchases'),
-            fetch('/api/maintenance-costs')
+            apiFetch('/api/funding-sources'),
+            apiFetch('/api/gains'),
+            apiFetch('/api/purchases'),
+            apiFetch('/api/maintenance-costs')
         ]);
         
         const sources = (await sourcesRes.json()).data || [];
@@ -10687,7 +10687,7 @@ async function openAddFundingSourceModal() {
         return;
     }
 
-    fetch('/api/funding-sources', {
+    apiFetch('/api/funding-sources', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -10762,7 +10762,7 @@ function saveGain() {
         return;
     }
 
-    fetch('/api/gains', {
+    apiFetch('/api/gains', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -10849,7 +10849,7 @@ function savePurchase() {
         return;
     }
 
-    fetch('/api/purchases', {
+    apiFetch('/api/purchases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

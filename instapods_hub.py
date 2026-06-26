@@ -236,8 +236,8 @@ def sync_loop():
     
     This loop:
     1. Pulls transactions from B2
-    2. Mirrors to Supabase
-    3. Pulls mobile notes from Supabase
+    2. Pulls mobile notes from Supabase
+    3. Pushes local transactions to B2
     """
     global last_sync_timestamp, sync_running
     
@@ -251,14 +251,11 @@ def sync_loop():
                     # Pull from B2
                     applied_count = mesh_coordinator.pull_from_cloud()
                     
-                    if applied_count > 0:
-                        # Mirror to Supabase
-                        transactions = mesh_coordinator.get_pending_transactions()
-                        if transactions:
-                            mesh_coordinator._mirror_to_supabase(transactions)
-                    
                     # Pull mobile notes from Supabase
                     mesh_coordinator._pull_mobile_notes()
+                    
+                    # Push to B2
+                    mesh_coordinator.push_to_cloud()
                     
                     # Update last sync timestamp
                     last_sync_timestamp = int(time.time() * 1000)
