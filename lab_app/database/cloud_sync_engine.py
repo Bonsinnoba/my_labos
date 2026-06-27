@@ -20,6 +20,7 @@ from typing import Optional, Dict, Any
 import sqlite3
 import zlib
 from io import BytesIO
+from botocore.exceptions import ClientError
 
 # Import secure vault for encryption
 from .secure_vault import SecureFileVault, InvalidKeyError, CorruptedPayloadError
@@ -286,9 +287,12 @@ class DualAccountSyncEngine:
                 logger.info(f"File {final_file_name} already exists in Account #1, skipping upload")
                 public_url = f"{self.config['ACCOUNT_1_ENDPOINT']}/{bucket_name}/{final_file_name}"
                 return public_url
-            except self.account1_client.exceptions.NoSuchKey:
-                # File doesn't exist, proceed with upload
-                pass
+            except ClientError as e:
+                if e.response['Error']['Code'] == '404':
+                    # File doesn't exist on B2, proceed with upload
+                    pass
+                else:
+                    raise  # re-raise any unexpected errors
             
             logger.info(f"Uploading {file_name} to Account #1 (Heavy Storage)")
             
@@ -373,9 +377,12 @@ class DualAccountSyncEngine:
                 logger.info(f"File {final_file_name} already exists in Account #2, skipping upload")
                 public_url = f"{self.config['ACCOUNT_2_ENDPOINT']}/{bucket_name}/{final_file_name}"
                 return public_url
-            except self.account2_client.exceptions.NoSuchKey:
-                # File doesn't exist, proceed with upload
-                pass
+            except ClientError as e:
+                if e.response['Error']['Code'] == '404':
+                    # File doesn't exist on B2, proceed with upload
+                    pass
+                else:
+                    raise  # re-raise any unexpected errors
             
             logger.info(f"Uploading {file_name} to Account #2 (Light Storage)")
             

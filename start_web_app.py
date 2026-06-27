@@ -12,7 +12,10 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 # Load environment variables
-load_dotenv()
+load_dotenv(Path(__file__).parent / ".env")  # change this line too
+# DEBUG - remove after fixing
+print(f"[env] ACCOUNT_1_KEY_ID loaded: {bool(os.getenv('ACCOUNT_1_KEY_ID'))}")
+print(f"[env] ACCOUNT_2_KEY_ID loaded: {bool(os.getenv('ACCOUNT_2_KEY_ID'))}")
 
 # Add lab_app to path
 sys.path.insert(0, str(Path(__file__).parent / "lab_app"))
@@ -43,7 +46,7 @@ def main():
         env["PYTHONIOENCODING"] = "utf-8"
         subprocess.run(
             [sys.executable, "-m", "uvicorn", "lab_app.api_server:app", 
-             "--host", host, "--port", port, "--reload"],
+             "--host", host, "--port", port,],
             cwd=Path(__file__).parent,
             env=env
         )
