@@ -580,8 +580,36 @@ class DualAccountSyncEngine:
                 
             for key in keys_to_delete:
                 try:
-                    client.delete_object(Bucket=bucket, Key=key)
-                    logger.info(f"Successfully requested deletion of '{key}' from {account_name} bucket '{bucket}'")
+                    # Handle versioned buckets - list all versions and delete each one
+                    versions = []
+                    try:
+                        paginator = client.get_paginator('list_object_versions')
+                        for page in paginator.paginate(Bucket=bucket, Prefix=key):
+                            # Get all versions of the file
+                            for version in page.get('Versions', []):
+                                if version['Key'] == key:
+                                    versions.append(version['VersionId'])
+                            # Get all delete markers
+                            for marker in page.get('DeleteMarkers', []):
+                                if marker['Key'] == key:
+                                    versions.append(marker['VersionId'])
+                    except Exception as e:
+                        logger.warning(f"Failed to list versions for '{key}': {e}, attempting single delete")
+                    
+                    if versions:
+                        # Delete each version individually
+                        for version_id in versions:
+                            try:
+                                client.delete_object(Bucket=bucket, Key=key, VersionId=version_id)
+                                logger.info(f"Deleted version {version_id} of '{key}' from {account_name} bucket '{bucket}'")
+                            except Exception as e:
+                                logger.error(f"Failed to delete version {version_id} of '{key}': {e}")
+                                success = False
+                        logger.info(f"Deleted {len(versions)} version(s) of '{key}' from {account_name} bucket '{bucket}'")
+                    else:
+                        # No versions found, try single delete (for non-versioned buckets)
+                        client.delete_object(Bucket=bucket, Key=key)
+                        logger.info(f"Successfully requested deletion of '{key}' from {account_name} bucket '{bucket}'")
                 except client.exceptions.NoSuchKey:
                     logger.warning(f"File '{key}' not found in {account_name} bucket '{bucket}' (may already be deleted)")
                 except Exception as e:
@@ -668,13 +696,11 @@ class DualAccountSyncEngine:
             try:
                 # Delete from cloud storage (target account only based on file size)
                 if self._delete_from_cloud(file_name, file_size):
-                    # Purge database record (mark as tombstoned)
-                    if self._purge_database_record(db_path, file_name):
-                        # Clear deletion log entry
-                        if self._clear_deletion_log(db_path, log_id):
-                            deletion_success_count += 1
-                        else:
-                            deletion_failure_count += 1
+                    # Purge database record (mark as tombstoned) - may not exist if already deleted
+                    self._purge_database_record(db_path, file_name)
+                    # Clear deletion log entry regardless of database purge result
+                    if self._clear_deletion_log(db_path, log_id):
+                        deletion_success_count += 1
                     else:
                         deletion_failure_count += 1
                 else:
