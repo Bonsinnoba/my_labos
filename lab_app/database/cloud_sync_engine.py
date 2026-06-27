@@ -10,6 +10,8 @@ All files are encrypted locally using AES-256-GCM before upload for zero-knowled
 """
 
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import threading
 import time
 import logging
