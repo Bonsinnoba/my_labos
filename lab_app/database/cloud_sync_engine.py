@@ -26,13 +26,13 @@ from .secure_vault import SecureFileVault, InvalidKeyError, CorruptedPayloadErro
 CLOUD_CONFIG = {
     # Dual-Account Backblaze B2 Configuration for 20GB Free Tier Maximization
     # Account #1 - Heavy Storage Bucket (files >= 50MB)
-    "ACCOUNT_1_ENDPOINT": os.getenv("ACCOUNT_1_ENDPOINT", "https://s3.us-east-005.backblazeb2.com"),
+    "ACCOUNT_1_ENDPOINT": os.getenv("ACCOUNT_1_ENDPOINT", "https://s3.eu-central-003.backblazeb2.com"),
     "ACCOUNT_1_KEY_ID": os.getenv("ACCOUNT_1_KEY_ID", ""),
     "ACCOUNT_1_APPLICATION_KEY": os.getenv("ACCOUNT_1_APPLICATION_KEY", ""),
     "ACCOUNT_1_BUCKET": os.getenv("ACCOUNT_1_BUCKET", "lab-heavy-storage"),
     
     # Account #2 - Light Storage Bucket (files < 50MB)
-    "ACCOUNT_2_ENDPOINT": os.getenv("ACCOUNT_2_ENDPOINT", "https://s3.us-east-005.backblazeb2.com"),
+    "ACCOUNT_2_ENDPOINT": os.getenv("ACCOUNT_2_ENDPOINT", "https://s3.eu-central-003.backblazeb2.com"),
     "ACCOUNT_2_KEY_ID": os.getenv("ACCOUNT_2_KEY_ID", ""),
     "ACCOUNT_2_APPLICATION_KEY": os.getenv("ACCOUNT_2_APPLICATION_KEY", ""),
     "ACCOUNT_2_BUCKET": os.getenv("ACCOUNT_2_BUCKET", "lab-light-storage"),
@@ -130,7 +130,7 @@ class DualAccountSyncEngine:
                 aws_access_key_id=self.config["ACCOUNT_1_KEY_ID"],
                 aws_secret_access_key=self.config["ACCOUNT_1_APPLICATION_KEY"],
                 config=Config(signature_version='s3v4'),
-                region_name='us-east-005'
+                region_name='eu-central-003'
             )
             
             logger.info("Account #1 boto3 client initialized successfully")
@@ -165,7 +165,7 @@ class DualAccountSyncEngine:
                 aws_access_key_id=self.config["ACCOUNT_2_KEY_ID"],
                 aws_secret_access_key=self.config["ACCOUNT_2_APPLICATION_KEY"],
                 config=Config(signature_version='s3v4'),
-                region_name='us-east-005'
+                region_name='eu-central-003'
             )
             
             logger.info("Account #2 boto3 client initialized successfully")

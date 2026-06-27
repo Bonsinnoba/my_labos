@@ -1161,6 +1161,53 @@ async def delete_notebook_entry(entry_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/notebook/{entry_id}/export-txt")
+async def export_notebook_entry_txt(entry_id: int):
+    """Export a notebook entry as a plain .txt file."""
+    try:
+        entry = notebook.get_entry(entry_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Entry not found")
+
+        title = entry.get('title', 'note')
+        content_html = entry.get('content', '')
+
+        # Strip HTML tags using Python's built-in html.parser
+        from html.parser import HTMLParser
+
+        class HTMLStripper(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.reset()
+                self.fed = []
+
+            def handle_data(self, d):
+                self.fed.append(d)
+
+            def get_data(self):
+                return '\n'.join(self.fed)
+
+        stripper = HTMLStripper()
+        stripper.feed(content_html)
+        plain_text = stripper.get_data()
+
+        from datetime import datetime
+        header = f"{title}\n{'=' * len(title)}\nExported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        full_text = header + plain_text
+
+        from fastapi.responses import Response
+        safe_filename = title.replace(' ', '_').encode('ascii', 'ignore').decode('ascii') + '.txt'
+        return Response(
+            content=full_text,
+            media_type='text/plain; charset=utf-8',
+            headers={'Content-Disposition': f'attachment; filename="{safe_filename}"'}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # --- Components (Inventory) API ---
 
 @app.get("/api/components")

@@ -1,3 +1,4 @@
+import './polyfills'; // ⚠️ Must be first – patches URL for Hermes before supabase loads
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { PaperProvider } from 'react-native-paper';

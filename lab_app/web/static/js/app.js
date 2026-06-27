@@ -3646,6 +3646,26 @@ function renderDocumentPreview(url, fileType, container) {
                 console.warn('Video load() threw:', err);
             }
         }
+    } else if (type.includes('text') || type.includes('txt') || type === 'text/plain') {
+        // Text file — fetch and display inline
+        fetch(url)
+            .then(r => r.text())
+            .then(text => {
+                const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                container.innerHTML = `
+                    <div style="width:100%;height:100%;overflow:auto;padding:20px;box-sizing:border-box;">
+                        <pre style="white-space:pre-wrap;word-break:break-word;font-family:'Courier New',monospace;font-size:13px;line-height:1.6;color:var(--text-primary);margin:0;">${escaped}</pre>
+                    </div>
+                `;
+            })
+            .catch(() => {
+                container.innerHTML = `
+                    <div style="text-align: center;">
+                        <p style="color: var(--text-secondary); margin-bottom: 16px;">Could not load text file</p>
+                        <button class="btn btn-primary" onclick="downloadCurrentDocument()">📥 Download File</button>
+                    </div>
+                `;
+            });
     } else {
         console.log('No preview available for type:', type);
         container.innerHTML = `
@@ -3916,6 +3936,8 @@ function getDocumentIcon(fileType) {
     const type = fileType?.toLowerCase() || '';
     if (type.includes('pdf')) return '📄';
     if (type.includes('image') || type.includes('png') || type.includes('jpg')) return '🖼️';
+    if (type.includes('video') || type.includes('mp4') || type.includes('mov')) return '🎬';
+    if (type.includes('text') || type.includes('txt') || type === 'text/plain') return '📝';
     if (type.includes('schematic') || type.includes('circuit')) return '📊';
     if (type.includes('datasheet')) return '📋';
     return '📁';
@@ -4508,6 +4530,31 @@ function generateDrawingRepresentation() {
     }
     
     return representation;
+}
+
+/**
+ * Download the currently loaded note as a plain .txt file.
+ * Strips HTML tags and renders a clean plain-text version.
+ */
+function downloadNoteAsTxt() {
+    const title = document.getElementById('notebook-editor-title').value || 'note';
+    const editorEl = document.getElementById('notebook-editor-content');
+    // Strip HTML for plain text
+    const tmp = document.createElement('div');
+    tmp.innerHTML = editorEl.innerHTML;
+    const plainText = tmp.innerText || tmp.textContent || '';
+    
+    const header = `${title}\n${'='.repeat(title.length)}\nExported: ${new Date().toLocaleString()}\n\n`;
+    const blob = new Blob([header + plainText], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    // Sanitize title for filename
+    a.download = title.replace(/[^a-z0-9_\-\.]/gi, '_').replace(/_+/g, '_') + '.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 }
 
 async function deleteCurrentNote() {
