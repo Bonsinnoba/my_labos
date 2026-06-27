@@ -294,10 +294,15 @@ class DualAccountSyncEngine:
             if self.secure_vault:
                 logger.info("Encrypting and compressing file before upload")
                 encrypted_content = self.secure_vault.encrypt_file(file_path)
+                logger.info(f"Encrypted content size: {len(encrypted_content)} bytes")
                 
                 # Upload encrypted content using BytesIO
+                # CRITICAL: seek(0) is required because BytesIO pointer is at end after creation
+                encrypted_buffer = BytesIO(encrypted_content)
+                encrypted_buffer.seek(0)
+                logger.info(f"Uploading {len(encrypted_content)} bytes to {final_file_name}")
                 self.account1_client.upload_fileobj(
-                    BytesIO(encrypted_content),
+                    encrypted_buffer,
                     Bucket=bucket_name,
                     Key=final_file_name
                 )
@@ -306,6 +311,10 @@ class DualAccountSyncEngine:
                 logger.info("Compressing file before upload (encryption disabled)")
                 compressed_content = self._compress_file(file_path)
                 if compressed_content:
+                    # CRITICAL: seek(0) is required because BytesIO pointer is at end after creation
+                    compressed_content.seek(0)
+                    compressed_size = compressed_content.getbuffer().nbytes
+                    logger.info(f"Uploading {compressed_size} compressed bytes to {final_file_name}")
                     self.account1_client.upload_fileobj(
                         compressed_content,
                         Bucket=bucket_name,
@@ -372,10 +381,15 @@ class DualAccountSyncEngine:
             if self.secure_vault:
                 logger.info("Encrypting and compressing file before upload")
                 encrypted_content = self.secure_vault.encrypt_file(file_path)
+                logger.info(f"Encrypted content size: {len(encrypted_content)} bytes")
                 
                 # Upload encrypted content using BytesIO
+                # CRITICAL: seek(0) is required because BytesIO pointer is at end after creation
+                encrypted_buffer = BytesIO(encrypted_content)
+                encrypted_buffer.seek(0)
+                logger.info(f"Uploading {len(encrypted_content)} bytes to {final_file_name}")
                 self.account2_client.upload_fileobj(
-                    BytesIO(encrypted_content),
+                    encrypted_buffer,
                     Bucket=bucket_name,
                     Key=final_file_name
                 )
@@ -384,6 +398,10 @@ class DualAccountSyncEngine:
                 logger.info("Compressing file before upload (encryption disabled)")
                 compressed_content = self._compress_file(file_path)
                 if compressed_content:
+                    # CRITICAL: seek(0) is required because BytesIO pointer is at end after creation
+                    compressed_content.seek(0)
+                    compressed_size = compressed_content.getbuffer().nbytes
+                    logger.info(f"Uploading {compressed_size} compressed bytes to {final_file_name}")
                     self.account2_client.upload_fileobj(
                         compressed_content,
                         Bucket=bucket_name,

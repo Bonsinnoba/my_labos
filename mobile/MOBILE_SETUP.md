@@ -15,13 +15,13 @@ DEVICE_ID=MOBILE_DEVICE_01
 
 # Backblaze B2 Configuration (Dual-Account for 20GB Free Tier Maximization)
 # Account #1 - Light Storage Bucket (files < 50MB)
-ACCOUNT_1_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+ACCOUNT_1_ENDPOINT=https://s3.eu-central-003.backblazeb2.com
 ACCOUNT_1_KEY_ID=your_account_1_key_id_here
 ACCOUNT_1_APPLICATION_KEY=your_account_1_application_key_here
 ACCOUNT_1_BUCKET=lab-light-storage
 
 # Account #2 - Heavy Storage Bucket (files >= 50MB)
-ACCOUNT_2_ENDPOINT=https://s3.us-east-005.backblazeb2.com
+ACCOUNT_2_ENDPOINT=https://s3.eu-central-003.backblazeb2.com
 ACCOUNT_2_KEY_ID=your_account_2_key_id_here
 ACCOUNT_2_APPLICATION_KEY=your_account_2_application_key_here
 ACCOUNT_2_BUCKET=lab-heavy-storage
