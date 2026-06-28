@@ -379,6 +379,69 @@ class KnowledgeVault:
             'by_type': type_counts
         }
     
+    def scan_and_register_existing_files(self, force_update: bool = False) -> int:
+        """
+        Scan vault directories and register any files that aren't in the database.
+        
+        Args:
+            force_update: If True, re-register all files even if they already exist
+            
+        Returns:
+            Number of files registered
+        """
+        registered_count = 0
+        
+        # Scan each subdirectory
+        for dir_name in ['notes', 'pdfs', 'images', 'datasheets', 'schematics']:
+            dir_path = self.vault_path / dir_name
+            if not dir_path.exists():
+                continue
+            
+            for file_path in dir_path.iterdir():
+                if file_path.is_file():
+                    try:
+                        # Check if file is already in database
+                        file_str = str(file_path)
+                        existing_docs = self.db.get_all_documents()
+                        already_registered = any(doc['file_path'] == file_str for doc in existing_docs)
+                        
+                        if already_registered and not force_update:
+                            continue
+                        
+                        # Determine file type
+                        file_type = self._get_file_type(file_str)
+                        
+                        # Generate title from filename
+                        title = file_path.stem.replace('_', ' ').title()
+                        
+                        # Extract metadata
+                        metadata = self._extract_metadata(file_str, file_type)
+                        
+                        # Register in database
+                        doc_id = self.db.add_document(
+                            title=title,
+                            file_path=file_str,
+                            file_type=file_type,
+                            file_size=metadata['file_size'],
+                            description=f"Auto-registered from {dir_name} directory",
+                            metadata=json.dumps(metadata),
+                            tags=None,
+                            project_id=None,
+                            component_id=None,
+                            equipment_id=None,
+                            experiment_id=None,
+                            stage_id=None
+                        )
+                        
+                        registered_count += 1
+                        print(f"[KnowledgeVault] Registered existing file: {file_path.name} (ID: {doc_id})")
+                        
+                    except Exception as e:
+                        print(f"[KnowledgeVault] Failed to register {file_path.name}: {e}")
+        
+        print(f"[KnowledgeVault] Registered {registered_count} existing files")
+        return registered_count
+    
     def close(self) -> None:
         """Close the database connection."""
         if self.db:

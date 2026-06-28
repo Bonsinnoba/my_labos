@@ -71,6 +71,8 @@ voice_listener: Optional[VoiceListener] = None
 
 dashboard = LabDashboard(db=db)
 knowledge_vault = KnowledgeVault(db=db)
+# Scan and register any existing files in knowledge vault directories
+knowledge_vault.scan_and_register_existing_files()
 notebook = EngineeringNotebook(db=db)
 component_manager = ComponentManager(db=db)
 equipment_manager = EquipmentManager(db=db)

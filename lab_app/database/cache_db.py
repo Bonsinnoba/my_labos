@@ -190,6 +190,9 @@ class CacheDatabase:
             # Create mesh_transactions table for decentralized sync
             self._create_mesh_transactions_table(cursor)
             
+            # Migration: Add is_synced column to mesh_transactions
+            self._migrate_mesh_transactions_is_synced(cursor)
+            
             self.conn.commit()
             print(f"Database initialized successfully at: {os.path.abspath(self.db_path)}")
             
@@ -374,6 +377,27 @@ class CacheDatabase:
             except sqlite3.Error as e:
                 print(f"[db] Migration warning (is_tombstone for {table}): {e}")
                 # Don't raise error - migration is optional
+
+    def _migrate_mesh_transactions_is_synced(self, cursor: sqlite3.Cursor) -> None:
+        """
+        Add is_synced column to mesh_transactions table for tracking sync status.
+        
+        Args:
+            cursor: Database cursor
+        """
+        try:
+            cursor.execute("PRAGMA table_info(mesh_transactions)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'is_synced' not in columns:
+                print("[db] Migrating mesh_transactions table: adding is_synced column...")
+                cursor.execute("ALTER TABLE mesh_transactions ADD COLUMN is_synced INTEGER DEFAULT 0")
+                print("[db] Migration complete: is_synced column added to mesh_transactions")
+            else:
+                print("[db] mesh_transactions table already has is_synced column")
+        except sqlite3.Error as e:
+            print(f"[db] Migration warning (is_synced for mesh_transactions): {e}")
+            # Don't raise error - migration is optional
     
     def _create_phase4_tables(self, cursor: sqlite3.Cursor) -> None:
         """
@@ -878,7 +902,8 @@ class CacheDatabase:
                 operation TEXT NOT NULL,
                 payload TEXT NOT NULL,
                 timestamp INTEGER NOT NULL,
-                device_origin TEXT NOT NULL
+                device_origin TEXT NOT NULL,
+                is_synced INTEGER DEFAULT 0
             )
         """)
         
@@ -2192,8 +2217,26 @@ class CacheDatabase:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)
             """, (title, file_path, file_type, file_size, description, metadata, 
                   tags, project_id, component_id, equipment_id, experiment_id, stage_id))
+            doc_id = cursor.lastrowid
             self.conn.commit()
-            return cursor.lastrowid
+            
+            # Log mutation for mesh sync
+            self._log_mutation('knowledge_vault', 'INSERT', {
+                'title': title,
+                'file_path': file_path,
+                'file_type': file_type,
+                'file_size': file_size,
+                'description': description,
+                'metadata': metadata,
+                'tags': tags,
+                'project_id': project_id,
+                'component_id': component_id,
+                'equipment_id': equipment_id,
+                'experiment_id': experiment_id,
+                'stage_id': stage_id
+            }, doc_id)
+            
+            return doc_id
         except sqlite3.Error as e:
             print(f"Error adding document: {e}")
             raise
@@ -2253,6 +2296,34 @@ class CacheDatabase:
             return cursor.rowcount > 0
         except sqlite3.Error as e:
             print(f"Error updating document access: {e}")
+            raise
+    
+    def update_document(self, doc_id: int, **kwargs) -> bool:
+        """Update document metadata."""
+        try:
+            cursor = self.conn.cursor()
+            set_clauses = []
+            values = []
+            
+            for key, value in kwargs.items():
+                set_clauses.append(f"{key} = ?")
+                values.append(value)
+            
+            if not set_clauses:
+                return False
+            
+            values.append(doc_id)
+            query = f"UPDATE knowledge_vault SET {', '.join(set_clauses)} WHERE id = ?"
+            cursor.execute(query, values)
+            self.conn.commit()
+            
+            # Log mutation for mesh sync
+            kwargs['_record_id'] = doc_id
+            self._log_mutation('knowledge_vault', 'UPDATE', kwargs, doc_id)
+            
+            return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            print(f"Error updating document: {e}")
             raise
     
     def delete_document(self, doc_id: int) -> bool:
