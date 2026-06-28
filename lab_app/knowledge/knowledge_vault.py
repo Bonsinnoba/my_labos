@@ -47,6 +47,8 @@ class KnowledgeVault:
         (self.vault_path / "datasheets").mkdir(exist_ok=True)
         (self.vault_path / "schematics").mkdir(exist_ok=True)
         (self.vault_path / "notes").mkdir(exist_ok=True)
+        (self.vault_path / "videos").mkdir(exist_ok=True)
+        (self.vault_path / "other").mkdir(exist_ok=True)
         
         print(f"✅ Knowledge Vault initialized at: {self.vault_path.absolute()}")
     

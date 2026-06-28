@@ -2963,7 +2963,7 @@ async function renderExperimentTimeline(experimentId) {
         // cache events for quick lookup when user clicks
         window._timelineEventCache = window._timelineEventCache || {};
         timeline.innerHTML = events.map(ev => {
-            const key = `${ev.type}:${ev.id}`;
+            const key = `project:${ev.type}:${ev.id}`;
             window._timelineEventCache[key] = ev;
             if (ev.type === 'stage') {
                 // build attachments badges
@@ -3039,10 +3039,16 @@ async function showTimelineEventDetails(type, id, experimentId) {
             return;
         }
         const title = type === 'stage' ? `Stage: ${ev.title}` : `Usage: ${ev.title}`;
+        
+        // Determine if this is a project stage or experiment stage based on experimentId
+        const isProjectStage = type === 'stage' && !experimentId;
+        
         const apiCollectionUrl = type === 'stage'
-            ? `/api/experiment_stages?experiment_id=${experimentId}&limit=200`
+            ? (isProjectStage ? `/api/project_stages?limit=200` : `/api/experiment_stages?experiment_id=${experimentId}&limit=200`)
             : `/api/usage?experiment_id=${experimentId}&limit=200`;
-        const apiResourceUrl = type === 'stage' ? `/api/experiment_stages/${id}` : `/api/usage/${id}`;
+        const apiResourceUrl = type === 'stage' 
+            ? (isProjectStage ? `/api/project_stages/${id}` : `/api/experiment_stages/${id}`) 
+            : `/api/usage/${id}`;
 
         // Fetch full item data from collection endpoint to obtain editable fields
         const collectionResp = await apiFetch(apiCollectionUrl);
@@ -3088,7 +3094,7 @@ async function showTimelineEventDetails(type, id, experimentId) {
                     linked_note_id: values.linked_note_id || null
                 };
                 try {
-                    const r = await apiFetch(`/api/experiment_stages/${id}`, {
+                    const r = await apiFetch(apiResourceUrl, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload)
@@ -3426,7 +3432,7 @@ function renderDocumentsGrid(documents) {
                     ${thumbnailHtml}
                     <div class="title">${doc.title}</div>
                     <div class="meta">${isNote ? (doc.created_at || 'No date') : (doc.created_at || 'No date')}</div>
-                    <div class="meta">${isNote ? 'Note' : (doc.project_id ? 'Project linked' : 'No project')}</div>
+                    <div class="meta">${isNote ? 'Note' : (doc.project_name || (doc.project_id ? 'Project linked' : 'No project'))}</div>
                     <div class="tags">
                         ${doc.tags ? doc.tags.split(',').slice(0, 3).map(tag => `<span class="document-tag">${tag.trim()}</span>`).join('') : ''}
                     </div>

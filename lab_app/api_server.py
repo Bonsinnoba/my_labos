@@ -892,6 +892,10 @@ async def view_document(doc_id: int):
         )
     except HTTPException:
         raise
+    except (ConnectionResetError, BrokenPipeError) as e:
+        # Silently ignore connection errors from video streaming clients
+        # These occur when clients seek/stop playback during partial content requests
+        pass
     except Exception as e:
         print(f"[DEBUG] Error viewing document: {e}")
         import traceback
@@ -2033,25 +2037,43 @@ async def create_equipment_usage(usage: EquipmentUsageCreate):
 async def return_equipment(usage_id: int, data: Dict[str, Any]):
     """Record returning or stopping use of equipment."""
     try:
-        success = db.return_equipment(
+        success = db.update_equipment_usage_return(
             usage_id=usage_id,
-            return_date=data.get('return_date'),
-            post_use_status=data.get('post_use_status', 'usable'),
-            condition_notes=data.get('condition_notes'),
-            efficiency_percentage=data.get('efficiency_percentage')
+            return_date=data.get('return_date')
         )
         if not success:
             raise HTTPException(status_code=404, detail="Usage record not found or already returned")
+        
+        # Update additional fields if provided
+        if data.get('post_use_status') or data.get('condition_notes') or data.get('efficiency_percentage') is not None:
+            cursor = db.conn.cursor()
+            updates = []
+            params = []
+            if data.get('post_use_status'):
+                updates.append("post_use_status = ?")
+                params.append(data.get('post_use_status'))
+            if data.get('condition_notes'):
+                updates.append("condition_notes = ?")
+                params.append(data.get('condition_notes'))
+            if data.get('efficiency_percentage') is not None:
+                updates.append("efficiency_percentage = ?")
+                params.append(data.get('efficiency_percentage'))
+            
+            if updates:
+                params.append(usage_id)
+                cursor.execute(f"UPDATE equipment_usage SET {', '.join(updates)} WHERE id = ?", params)
+                db.conn.commit()
+        
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/tool-usage")
-async def get_tool_usages():
-    """Get all tool usage records."""
+async def get_tool_usages(tool_id: Optional[int] = None):
+    """Get tool usage records, optionally filtered by tool_id."""
     try:
-        usages = db.get_all_tool_usage()
+        usages = db.get_tool_usage(tool_id=tool_id)
         return {"success": True, "data": usages}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -2077,10 +2099,10 @@ async def create_tool_usage(usage: ToolUsageCreate):
 
 
 @app.get("/api/material-usage")
-async def get_material_usages():
-    """Get all material usage records."""
+async def get_material_usages(material_id: Optional[int] = None):
+    """Get material usage records, optionally filtered by material_id."""
     try:
-        usages = db.get_all_material_usage()
+        usages = db.get_material_usage(material_id=material_id)
         return {"success": True, "data": usages}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -2092,6 +2114,42 @@ async def create_material_usage(usage: MaterialUsageCreate):
     try:
         usage_id = db.add_material_usage(
             material_id=usage.material_id,
+            quantity_used=usage.quantity_used,
+            project_id=usage.project_id,
+            experiment_id=usage.experiment_id,
+            notes=usage.notes
+        )
+        return {"success": True, "data": {"id": usage_id}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Component Usage API ---
+
+@app.get("/api/component-usage")
+async def get_component_usages(component_id: Optional[int] = None):
+    """Get component usage records, optionally filtered by component_id."""
+    try:
+        usages = db.get_component_usage(component_id=component_id)
+        return {"success": True, "data": usages}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ComponentUsageCreate(BaseModel):
+    component_id: int
+    quantity_used: int = 1
+    project_id: Optional[int] = None
+    experiment_id: Optional[int] = None
+    notes: Optional[str] = None
+
+
+@app.post("/api/component-usage")
+async def create_component_usage(usage: ComponentUsageCreate):
+    """Record using some components (automatically decrements inventory quantity)."""
+    try:
+        usage_id = db.add_component_usage(
+            component_id=usage.component_id,
             quantity_used=usage.quantity_used,
             project_id=usage.project_id,
             experiment_id=usage.experiment_id,

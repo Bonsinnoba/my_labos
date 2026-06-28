@@ -2259,23 +2259,26 @@ class CacheDatabase:
         """Retrieve all documents, optionally filtered."""
         try:
             cursor = self.conn.cursor()
-            query = "SELECT * FROM knowledge_vault WHERE is_tombstone = 0"
+            query = """SELECT kv.*, p.name as project_name 
+                      FROM knowledge_vault kv 
+                      LEFT JOIN projects p ON kv.project_id = p.id 
+                      WHERE kv.is_tombstone = 0"""
             params = []
             
             if project_id:
-                query += " AND project_id = ?"
+                query += " AND kv.project_id = ?"
                 params.append(project_id)
             if file_type:
-                query += " AND file_type = ?"
+                query += " AND kv.file_type = ?"
                 params.append(file_type)
             if experiment_id:
-                query += " AND experiment_id = ?"
+                query += " AND kv.experiment_id = ?"
                 params.append(experiment_id)
             if stage_id:
-                query += " AND stage_id = ?"
+                query += " AND kv.stage_id = ?"
                 params.append(stage_id)
             
-            query += " ORDER BY upload_date DESC"
+            query += " ORDER BY kv.upload_date DESC"
             cursor.execute(query, params)
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
