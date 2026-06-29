@@ -4,7 +4,7 @@ import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import AdvancedSearchBar from '../../components/common/AdvancedSearchBar';
 import ExperimentCard from '../../components/lists/ExperimentCard';
-import { experimentsApi, Experiment } from '../../services/api';
+import { experimentsApi, Experiment } from '../../services/api/experiments';
 
 export default function ExperimentsScreen({ navigation }: any) {
   const theme = useTheme();

@@ -48,7 +48,8 @@ export const findingsApi = {
   // Get all findings
   getAll: async (): Promise<Finding[]> => {
     try {
-      const findings = await apiClient.get<Finding[]>('/api/findings');
+      const response = await apiClient.get<{findings: Finding[]}>('/api/findings');
+      const findings = response.findings || [];
       await offlineCache.set('findings', findings);
       return findings;
     } catch (error) {

@@ -27,6 +27,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 
 from database.mesh_sync_coordinator import MeshSyncCoordinator
+from database.cache_db import CacheDatabase
 
 try:
     import boto3
@@ -54,6 +55,9 @@ sync_running = False
 # S3 clients for file storage buckets (separate from mesh sync)
 account1_s3_client = None
 account2_s3_client = None
+
+# Database for API endpoints
+db: Optional[CacheDatabase] = None
 
 
 def verify_jwt(credentials: HTTPAuthorizationCredentials = Depends(security)) -> bool:
@@ -230,6 +234,99 @@ async def upload_file(
         raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
 
 
+# --- Mobile API Endpoints ---
+
+@app.get("/api/projects")
+async def get_projects():
+    """Get all projects for mobile app."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+    try:
+        projects = db.get_all_projects()
+        return {"projects": projects}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/projects/{project_id}")
+async def get_project(project_id: int):
+    """Get a specific project by ID."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+    try:
+        project = db.get_project_by_id(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return {"success": True, "data": project}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/experiments")
+async def get_experiments(project_id: Optional[int] = None):
+    """Get all experiments, optionally filtered by project ID."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+    try:
+        if project_id:
+            experiments = db.get_experiments_by_project(project_id)
+        else:
+            experiments = db.get_all_experiments()
+        return experiments
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/experiments/{experiment_id}")
+async def get_experiment(experiment_id: int):
+    """Get a specific experiment by ID."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+    try:
+        experiment = db.get_experiment_by_id(experiment_id)
+        if not experiment:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+        return experiment
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/resources")
+async def get_resources(project_id: Optional[int] = None):
+    """Get all resources (documents), optionally filtered by project ID."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+    try:
+        if project_id:
+            resources = db.get_documents(project_id=project_id)
+        else:
+            resources = db.get_all_documents()
+        return resources
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/findings")
+async def get_findings(experiment_id: Optional[int] = None, severity: Optional[str] = None):
+    """Get all findings, optionally filtered by experiment ID or severity."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+    try:
+        if experiment_id:
+            findings = db.get_findings_by_experiment(experiment_id)
+        elif severity:
+            findings = db.get_findings_by_severity(severity)
+        else:
+            findings = db.get_all_findings()
+        return {"findings": findings}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def sync_loop():
     """
     Background sync loop that runs every 30 seconds.
@@ -324,7 +421,7 @@ def initialize_file_storage_clients():
 
 def initialize_mesh_coordinator():
     """Initialize the MeshSyncCoordinator for Instapods Hub."""
-    global mesh_coordinator
+    global mesh_coordinator, db
     
     # Load environment variables
     db_path = os.getenv("DATABASE_PATH", "local_cache.db")
@@ -333,6 +430,10 @@ def initialize_mesh_coordinator():
     b2_endpoint_url = os.getenv("MESH_SYNC_ENDPOINT", "https://s3.eu-central-003.backblazeb2.com")
     b2_access_key_id = os.getenv("MESH_SYNC_KEY_ID", "")
     b2_secret_access_key = os.getenv("MESH_SYNC_APPLICATION_KEY", "")
+    
+    # Initialize database for API endpoints
+    db = CacheDatabase(db_path=db_path)
+    print(f"[instapods_hub] CacheDatabase initialized with path: {db_path}")
     
     mesh_coordinator = MeshSyncCoordinator(
         db_path=db_path,

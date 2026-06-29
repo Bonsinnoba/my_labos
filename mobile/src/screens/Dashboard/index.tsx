@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '../../store';
@@ -7,23 +7,60 @@ import Card from '../../components/common/Card';
 import StatusBadge from '../../components/common/StatusBadge';
 import ProjectCard from '../../components/lists/ProjectCard';
 import ExperimentCard from '../../components/lists/ExperimentCard';
+import { projectsApi, Project } from '../../services/api/projects';
+import { experimentsApi, Experiment } from '../../services/api/experiments';
 
 export default function DashboardScreen({ navigation }: any) {
   const theme = useTheme();
   const { isOnline, lastSync } = useAppStore();
+  
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [experiments, setExperiments] = useState<Experiment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({
+    activeProjects: 0,
+    pendingExperiments: 0,
+    equipmentAvailable: 0,
+    recentFindings: 0,
+  });
+
+  useEffect(() => {
+    loadDashboardData();
+  }, []);
+
+  const loadDashboardData = async () => {
+    try {
+      setLoading(true);
+      const [projectsData, experimentsData] = await Promise.all([
+        projectsApi.getAll(),
+        experimentsApi.getAll(),
+      ]);
+      
+      setProjects(projectsData.slice(0, 3)); // Show recent 3 projects
+      setExperiments(experimentsData.slice(0, 2)); // Show recent 2 experiments
+      
+      // Calculate stats from real data
+      setStats({
+        activeProjects: projectsData.filter(p => p.status === 'Active').length,
+        pendingExperiments: experimentsData.filter(e => e.status === 'PENDING').length,
+        equipmentAvailable: 0, // TODO: Fetch from equipment API when available
+        recentFindings: 0, // TODO: Fetch from findings API when available
+      });
+    } catch (error) {
+      console.error('Error loading dashboard data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const quickStats = [
-    { label: 'Active Projects', value: '3', icon: 'folder', color: theme.colors.primary },
-    { label: 'Pending Experiments', value: '5', icon: 'flask', color: theme.colors.warning },
-    { label: 'Equipment Available', value: '12', icon: 'build', color: theme.colors.success },
-    { label: 'Recent Findings', value: '2', icon: 'search', color: theme.colors.info },
+    { label: 'Active Projects', value: stats.activeProjects.toString(), icon: 'folder', color: theme.colors.primary },
+    { label: 'Pending Experiments', value: stats.pendingExperiments.toString(), icon: 'flask', color: theme.colors.warning },
+    { label: 'Equipment Available', value: stats.equipmentAvailable.toString(), icon: 'build', color: theme.colors.success },
+    { label: 'Recent Findings', value: stats.recentFindings.toString(), icon: 'search', color: theme.colors.info },
   ];
 
-  const recentActivity = [
-    { id: 1, title: 'Project "Circuit Analysis" updated', time: '2 hours ago', type: 'project' },
-    { id: 2, title: 'Experiment "Power Test" completed', time: '5 hours ago', type: 'experiment' },
-    { id: 3, title: 'New finding added to "Sensor Calibration"', time: '1 day ago', type: 'finding' },
-  ];
+  const recentActivity = [];
 
   const quickActions = [
     { id: 1, title: 'Add Note', icon: 'create', color: theme.colors.info },
@@ -121,30 +158,27 @@ export default function DashboardScreen({ navigation }: any) {
               </Text>
             </TouchableOpacity>
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
-            <ProjectCard
-              name="Circuit Analysis"
-              status="Active"
-              progress={75}
-              lastUpdated="2 hours ago"
-              onPress={() => navigation.navigate('ProjectDetail', { projectId: 1 })}
-            />
-          <ProjectCard
-            name="Sensor Calibration"
-            status="Active"
-            progress={45}
-            lastUpdated="1 day ago"
-            onPress={() => navigation.navigate('ProjectDetail', { projectId: 2 })}
-          />
-          <ProjectCard
-            name="Power Supply Test"
-            status="Paused"
-            progress={30}
-            lastUpdated="3 days ago"
-            onPress={() => navigation.navigate('ProjectDetail', { projectId: 3 })}
-          />
-        </ScrollView>
-      </View>
+          {loading ? (
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+          ) : projects.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.horizontalScroll}>
+              {projects.map((project) => (
+                <ProjectCard
+                  key={project.id}
+                  name={project.name}
+                  status={project.status}
+                  progress={0}
+                  lastUpdated={project.updated_at ? new Date(project.updated_at).toLocaleDateString() : 'Unknown'}
+                  onPress={() => navigation.navigate('ProjectDetail', { projectId: project.id })}
+                />
+              ))}
+            </ScrollView>
+          ) : (
+            <Text style={[styles.emptyText, { color: theme.colors.onSurfaceVariant }]}>
+              No projects yet
+            </Text>
+          )}
+        </View>
 
       {/* Recent Activity */}
       <View style={styles.section}>
@@ -152,28 +186,34 @@ export default function DashboardScreen({ navigation }: any) {
           Recent Activity
         </Text>
         <Card elevation={0}>
-          {recentActivity.map((activity) => (
-            <View key={activity.id} style={[styles.activityItem, { borderBottomColor: theme.colors.border }]}>
-              <View style={styles.activityIcon}>
-                <Ionicons 
-                  name={
-                    activity.type === 'project' ? 'folder' :
-                    activity.type === 'experiment' ? 'flask' : 'search'
-                  } as any
-                  size={20} 
-                  color={theme.colors.primary} 
-                />
+          {recentActivity.length > 0 ? (
+            recentActivity.map((activity) => (
+              <View key={activity.id} style={[styles.activityItem, { borderBottomColor: theme.colors.border }]}>
+                <View style={styles.activityIcon}>
+                  <Ionicons 
+                    name={
+                      activity.type === 'project' ? 'folder' :
+                      activity.type === 'experiment' ? 'flask' : 'search'
+                    } as any
+                    size={20} 
+                    color={theme.colors.primary} 
+                  />
+                </View>
+                <View style={styles.activityContent}>
+                  <Text style={[styles.activityTitle, { color: theme.colors.onSurface }]}>
+                    {activity.title}
+                  </Text>
+                  <Text style={[styles.activityTime, { color: theme.colors.onSurfaceVariant }]}>
+                    {activity.time}
+                  </Text>
+                </View>
               </View>
-              <View style={styles.activityContent}>
-                <Text style={[styles.activityTitle, { color: theme.colors.onSurface }]}>
-                  {activity.title}
-                </Text>
-                <Text style={[styles.activityTime, { color: theme.colors.onSurfaceVariant }]}>
-                  {activity.time}
-                </Text>
-              </View>
-            </View>
-          ))}
+            ))
+          ) : (
+            <Text style={[styles.emptyText, { color: theme.colors.onSurfaceVariant, padding: 16 }]}>
+              No recent activity
+            </Text>
+          )}
         </Card>
       </View>
 
@@ -352,6 +392,11 @@ const styles = StyleSheet.create({
   },
   activityTime: {
     fontSize: 12,
+  },
+  emptyText: {
+    fontSize: 14,
+    textAlign: 'center',
+    paddingVertical: 16,
   },
   footer: {
     height: 20,

@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, SafeAreaView, Modal } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
-import { notebookApi, NotebookEntry, projectsApi, experimentsApi, Project, Experiment } from '../../services/api';
+import { notebookApi, NotebookEntry } from '../../services/api/services';
+import { projectsApi, Project } from '../../services/api/projects';
+import { experimentsApi, Experiment } from '../../services/api/experiments';
 
 interface NotebookFormData {
   title: string;

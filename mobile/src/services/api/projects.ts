@@ -32,7 +32,8 @@ export const projectsApi = {
   // Get all projects
   getAll: async (): Promise<Project[]> => {
     try {
-      const projects = await apiClient.get<Project[]>('/api/projects');
+      const response = await apiClient.get<{projects: Project[]}>('/api/projects');
+      const projects = response.projects || [];
       await offlineCache.set('projects', projects);
       return projects;
     } catch (error) {
@@ -49,7 +50,8 @@ export const projectsApi = {
   // Get project by ID
   getById: async (id: number): Promise<Project> => {
     try {
-      return await apiClient.get<Project>(`/api/projects/${id}`);
+      const response = await apiClient.get<{success: boolean, data: Project}>(`/api/projects/${id}`);
+      return response.data;
     } catch (error) {
       console.error('[projectsApi] Cloud API failed for getById:', error);
       const cachedProjects = await offlineCache.get<Project[]>('projects');

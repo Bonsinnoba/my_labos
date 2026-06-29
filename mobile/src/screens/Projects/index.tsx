@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AdvancedSearchBar from '../../components/common/AdvancedSearchBar';
 import StatusBadge from '../../components/common/StatusBadge';
 import ProjectCard from '../../components/lists/ProjectCard';
-import { projectsApi, Project } from '../../services/api';
+import { projectsApi, Project } from '../../services/api/projects';
 
 export default function ProjectsScreen({ navigation }: any) {
   const theme = useTheme();
