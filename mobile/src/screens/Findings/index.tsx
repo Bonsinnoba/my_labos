@@ -1,29 +1,42 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, SafeAreaView } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, SafeAreaView, ActivityIndicator } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import AdvancedSearchBar from '../../components/common/AdvancedSearchBar';
 import Card from '../../components/common/Card';
 import StatusBadge from '../../components/common/StatusBadge';
+import { findingsApi, Finding } from '../../services/api/findings';
 
 export default function FindingsScreen({ navigation }: any) {
   const theme = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterSeverity, setFilterSeverity] = useState<string>('All');
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const findings = [
-    { id: 1, title: 'Voltage instability at high load', severity: 'HIGH', status: 'OPEN', experiment: 'Voltage Stability Test', date: '2024-02-01' },
-    { id: 2, title: 'Minor calibration drift detected', severity: 'MEDIUM', status: 'OPEN', experiment: 'Sensor Calibration', date: '2024-01-28' },
-    { id: 3, title: 'Unexpected frequency response', severity: 'LOW', status: 'RESOLVED', experiment: 'Frequency Response', date: '2024-01-25' },
-    { id: 4, title: 'Thermal hotspot observed', severity: 'HIGH', status: 'IN_PROGRESS', experiment: 'Thermal Analysis', date: '2024-01-20' },
-    { id: 5, title: 'Noise level above threshold', severity: 'MEDIUM', status: 'OPEN', experiment: 'Noise Measurement', date: '2024-01-15' },
-  ];
+  useEffect(() => {
+    loadFindings();
+  }, []);
+
+  const loadFindings = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await findingsApi.getAll();
+      setFindings(data.findings || []);
+    } catch (err) {
+      setError('Failed to load findings');
+      console.error('Error loading findings:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const severityFilters = ['All', 'HIGH', 'MEDIUM', 'LOW'];
 
   const filteredFindings = findings.filter(finding => {
-    const matchesSearch = finding.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         finding.experiment.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = (finding.title || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesFilter = filterSeverity === 'All' || finding.severity === filterSeverity;
     return matchesSearch && matchesFilter;
   });
@@ -94,7 +107,27 @@ export default function FindingsScreen({ navigation }: any) {
 
         {/* Findings List */}
         <View style={styles.list}>
-          {filteredFindings.length > 0 ? (
+          {loading ? (
+            <View style={styles.loadingState}>
+              <ActivityIndicator size="large" color={theme.colors.primary} />
+              <Text style={[styles.loadingText, { color: theme.colors.onSurfaceVariant }]}>
+                Loading findings...
+              </Text>
+            </View>
+          ) : error ? (
+            <View style={styles.errorState}>
+              <Ionicons name="alert-circle" size={64} color={theme.colors.error} />
+              <Text style={[styles.errorText, { color: theme.colors.onSurfaceVariant }]}>
+                {error}
+              </Text>
+              <TouchableOpacity
+                style={[styles.retryButton, { backgroundColor: theme.colors.primary }]}
+                onPress={loadFindings}
+              >
+                <Text style={styles.retryButtonText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : filteredFindings.length > 0 ? (
             filteredFindings.map((finding) => (
               <Card
                 key={finding.id}
@@ -104,34 +137,28 @@ export default function FindingsScreen({ navigation }: any) {
                 <View style={styles.findingHeader}>
                   <View style={styles.findingTitleContainer}>
                   <Text style={[styles.findingTitle, { color: theme.colors.onSurface }]} numberOfLines={2}>
-                    {finding.title}
+                    {finding.title || 'Untitled Finding'}
                   </Text>
                   <View style={styles.badgeContainer}>
                     <View
                       style={[
                         styles.severityBadge,
-                        { backgroundColor: `${getSeverityColor(finding.severity)}20` },
+                        { backgroundColor: `${getSeverityColor(finding.severity || 'LOW')}20` },
                       ]}
                     >
-                      <Text style={[styles.severityText, { color: getSeverityColor(finding.severity) }]}>
-                        {finding.severity}
+                      <Text style={[styles.severityText, { color: getSeverityColor(finding.severity || 'LOW') }]}>
+                        {finding.severity || 'LOW'}
                       </Text>
                     </View>
-                    <StatusBadge status={finding.status} size="small" />
+                    <StatusBadge status={finding.status || 'OPEN'} size="small" />
                   </View>
                 </View>
                 <Ionicons name="chevron-forward" size={20} color={theme.colors.onSurfaceVariant} />
               </View>
               <View style={styles.findingInfo}>
-                <Ionicons name="flask" size={14} color={theme.colors.onSurfaceVariant} />
-                <Text style={[styles.infoText, { color: theme.colors.onSurfaceVariant }]} numberOfLines={1}>
-                  {finding.experiment}
-                </Text>
-              </View>
-              <View style={styles.findingInfo}>
                 <Ionicons name="calendar" size={14} color={theme.colors.onSurfaceVariant} />
                 <Text style={[styles.infoText, { color: theme.colors.onSurfaceVariant }]}>
-                  {finding.date}
+                  {finding.created_at ? new Date(finding.created_at).toLocaleDateString() : 'Unknown'}
                 </Text>
               </View>
             </Card>
@@ -252,5 +279,37 @@ const styles = StyleSheet.create({
   emptySubtext: {
     fontSize: 14,
     marginTop: 8,
+  },
+  loadingState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 64,
+  },
+  loadingText: {
+    fontSize: 16,
+    marginTop: 16,
+  },
+  errorState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 64,
+  },
+  errorText: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 16,
+  },
+  retryButton: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 16,
+  },
+  retryButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

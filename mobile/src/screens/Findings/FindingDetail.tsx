@@ -1,31 +1,70 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import StatusBadge from '../../components/common/StatusBadge';
 import Card from '../../components/common/Card';
+import { findingsApi, Finding } from '../../services/api/findings';
 
 export default function FindingDetailScreen({ route, navigation }: any) {
   const theme = useTheme();
   const { findingId } = route.params;
+  const [finding, setFinding] = useState<Finding | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const finding = {
-    id: findingId,
-    title: 'Voltage instability at high load',
-    severity: 'HIGH',
-    status: 'OPEN',
-    experiment: 'Voltage Stability Test',
-    date: '2024-02-01',
-    description: 'Observed significant voltage drop when load exceeds 80% of rated capacity. This could affect downstream components and requires immediate investigation.',
-    rootCause: 'Possible capacitor degradation in the power supply unit',
-    recommendedAction: 'Replace capacitors and re-test under full load conditions',
-    assignedTo: 'Dr. Smith',
-    priority: 'P1',
-    relatedExperiments: [
-      { id: 1, title: 'Voltage Stability Test', date: '2024-02-01' },
-      { id: 2, title: 'Current Measurement', date: '2024-02-10' },
-    ],
+  useEffect(() => {
+    loadFinding();
+  }, [findingId]);
+
+  const loadFinding = async () => {
+    try {
+      setLoading(true);
+      const data = await findingsApi.getById(findingId);
+      setFinding(data);
+    } catch (error) {
+      console.error('Error loading finding:', error);
+    } finally {
+      setLoading(false);
+    }
   };
+
+  if (loading) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+        <View style={[styles.header, { backgroundColor: theme.colors.surface }]}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color={theme.colors.onSurface} />
+          </TouchableOpacity>
+          <View style={styles.headerContent}>
+            <Text style={[styles.title, { color: theme.colors.onSurface }]}>Finding</Text>
+          </View>
+        </View>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        </View>
+      </View>
+    );
+  }
+
+  if (!finding) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+        <View style={[styles.header, { backgroundColor: theme.colors.surface }]}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color={theme.colors.onSurface} />
+          </TouchableOpacity>
+          <View style={styles.headerContent}>
+            <Text style={[styles.title, { color: theme.colors.onSurface }]}>Finding</Text>
+          </View>
+        </View>
+        <View style={styles.loadingContainer}>
+          <Text style={[styles.errorText, { color: theme.colors.onSurfaceVariant }]}>
+            Finding not found
+          </Text>
+        </View>
+      </View>
+    );
+  }
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -78,7 +117,7 @@ export default function FindingDetailScreen({ route, navigation }: any) {
         {/* Title */}
         <Card elevation={0}>
           <Text style={[styles.findingTitle, { color: theme.colors.onSurface }]}>
-            {finding.title}
+            {finding.title || 'Untitled Finding'}
           </Text>
         </Card>
 
@@ -88,7 +127,7 @@ export default function FindingDetailScreen({ route, navigation }: any) {
             Description
           </Text>
           <Text style={[styles.description, { color: theme.colors.onSurfaceVariant }]}>
-            {finding.description}
+            {finding.description || 'No description available'}
           </Text>
         </Card>
 
@@ -99,84 +138,19 @@ export default function FindingDetailScreen({ route, navigation }: any) {
           </Text>
           <View style={styles.detailRow}>
             <Text style={[styles.detailLabel, { color: theme.colors.onSurfaceVariant }]}>Status:</Text>
-            <StatusBadge status={finding.status} size="small" />
+            <StatusBadge status={finding.status || 'OPEN'} size="small" />
           </View>
           <View style={styles.detailRow}>
-            <Text style={[styles.detailLabel, { color: theme.colors.onSurfaceVariant }]}>Priority:</Text>
-            <Text style={[styles.detailValue, { color: theme.colors.error }]}>{finding.priority}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={[styles.detailLabel, { color: theme.colors.onSurfaceVariant }]}>Experiment:</Text>
-            <Text style={[styles.detailValue, { color: theme.colors.primary }]}>{finding.experiment}</Text>
+            <Text style={[styles.detailLabel, { color: theme.colors.onSurfaceVariant }]}>Severity:</Text>
+            <Text style={[styles.detailValue, { color: getSeverityColor(finding.severity || 'LOW') }]}>{finding.severity || 'LOW'}</Text>
           </View>
           <View style={styles.detailRow}>
             <Text style={[styles.detailLabel, { color: theme.colors.onSurfaceVariant }]}>Date:</Text>
-            <Text style={[styles.detailValue, { color: theme.colors.onSurface }]}>{finding.date}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={[styles.detailLabel, { color: theme.colors.onSurfaceVariant }]}>Assigned to:</Text>
-            <Text style={[styles.detailValue, { color: theme.colors.onSurface }]}>{finding.assignedTo}</Text>
+            <Text style={[styles.detailValue, { color: theme.colors.onSurface }]}>
+              {finding.created_at ? new Date(finding.created_at).toLocaleDateString() : 'Unknown'}
+            </Text>
           </View>
         </Card>
-
-        {/* Root Cause */}
-        <Card elevation={0}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>
-            Root Cause
-          </Text>
-          <Text style={[styles.rootCause, { color: theme.colors.onSurfaceVariant }]}>
-            {finding.rootCause}
-          </Text>
-        </Card>
-
-        {/* Recommended Action */}
-        <Card elevation={0}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>
-            Recommended Action
-          </Text>
-          <Text style={[styles.recommendedAction, { color: theme.colors.onSurfaceVariant }]}>
-            {finding.recommendedAction}
-          </Text>
-        </Card>
-
-        {/* Related Experiments */}
-        <Card elevation={0}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>
-            Related Experiments
-          </Text>
-          {finding.relatedExperiments.map((exp) => (
-            <TouchableOpacity key={exp.id} style={styles.relatedItem}>
-              <Ionicons name="flask" size={16} color={theme.colors.primary} />
-              <View style={styles.relatedInfo}>
-                <Text style={[styles.relatedTitle, { color: theme.colors.onSurface }]}>
-                  {exp.title}
-                </Text>
-                <Text style={[styles.relatedDate, { color: theme.colors.onSurfaceVariant }]}>
-                  {exp.date}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={theme.colors.onSurfaceVariant} />
-            </TouchableOpacity>
-          ))}
-        </Card>
-
-        {/* Actions */}
-        <View style={styles.actionsRow}>
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: theme.colors.primary }]}
-            onPress={() => console.log('Mark as resolved')}
-          >
-            <Ionicons name="checkmark-circle" size={20} color="white" />
-            <Text style={styles.actionButtonText}>Mark Resolved</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: theme.colors.surface }]}
-            onPress={() => console.log('Assign')}
-          >
-            <Ionicons name="person-add" size={20} color={theme.colors.onSurface} />
-            <Text style={[styles.actionButtonText, { color: theme.colors.onSurface }]}>Assign</Text>
-          </TouchableOpacity>
-        </View>
 
         <View style={styles.footer} />
       </ScrollView>
@@ -309,5 +283,14 @@ const styles = StyleSheet.create({
   },
   footer: {
     height: 20,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#666',
   },
 });

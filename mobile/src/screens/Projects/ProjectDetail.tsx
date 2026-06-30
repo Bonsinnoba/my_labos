@@ -1,39 +1,78 @@
-import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import StatusBadge from '../../components/common/StatusBadge';
 import Card from '../../components/common/Card';
 import ExperimentCard from '../../components/lists/ExperimentCard';
+import { projectsApi, Project } from '../../services/api/projects';
+import { experimentsApi, Experiment } from '../../services/api/experiments';
 
 export default function ProjectDetailScreen({ route, navigation }: any) {
   const theme = useTheme();
   const { projectId } = route.params;
   const [activeTab, setActiveTab] = useState('overview');
+  const [project, setProject] = useState<Project | null>(null);
+  const [experiments, setExperiments] = useState<Experiment[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const project = {
-    id: projectId,
-    name: 'Circuit Analysis',
-    description: 'Comprehensive analysis of electronic circuits for power efficiency optimization',
-    status: 'Active',
-    progress: 75,
-    startDate: '2024-01-15',
-    lastUpdated: '2 hours ago',
-    experiments: [
-      { id: 1, title: 'Voltage Stability Test', status: 'COMPLETED', date: '2024-02-01' },
-      { id: 2, title: 'Current Measurement', status: 'IN_PROGRESS', date: '2024-02-10' },
-      { id: 3, title: 'Thermal Analysis', status: 'PENDING', date: '2024-02-15' },
-    ],
-    notes: [
-      { id: 1, title: 'Initial observations', date: '2024-01-16', content: 'Circuit shows stable voltage output under normal conditions' },
-      { id: 2, title: 'Power efficiency findings', date: '2024-01-20', content: 'Efficiency improved by 15% after capacitor replacement' },
-    ],
-    timeline: [
-      { id: 1, event: 'Project started', date: '2024-01-15', type: 'milestone' },
-      { id: 2, event: 'First experiment completed', date: '2024-02-01', type: 'experiment' },
-      { id: 3, event: 'Mid-term review', date: '2024-02-05', type: 'review' },
-    ],
+  useEffect(() => {
+    loadProjectData();
+  }, [projectId]);
+
+  const loadProjectData = async () => {
+    try {
+      setLoading(true);
+      const [projectData, experimentsData] = await Promise.all([
+        projectsApi.getById(projectId),
+        experimentsApi.getAll(),
+      ]);
+      setProject(projectData);
+      setExperiments(experimentsData.filter((e: Experiment) => e.project_id === projectId));
+    } catch (error) {
+      console.error('Error loading project data:', error);
+    } finally {
+      setLoading(false);
+    }
   };
+
+  if (loading) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+        <View style={[styles.header, { backgroundColor: theme.colors.surface }]}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color={theme.colors.onSurface} />
+          </TouchableOpacity>
+          <View style={styles.headerContent}>
+            <Text style={[styles.title, { color: theme.colors.onSurface }]}>Project</Text>
+          </View>
+        </View>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        </View>
+      </View>
+    );
+  }
+
+  if (!project) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+        <View style={[styles.header, { backgroundColor: theme.colors.surface }]}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color={theme.colors.onSurface} />
+          </TouchableOpacity>
+          <View style={styles.headerContent}>
+            <Text style={[styles.title, { color: theme.colors.onSurface }]}>Project</Text>
+          </View>
+        </View>
+        <View style={styles.loadingContainer}>
+          <Text style={[styles.errorText, { color: theme.colors.onSurfaceVariant }]}>
+            Project not found
+          </Text>
+        </View>
+      </View>
+    );
+  }
 
   const tabs = [
     { id: 'overview', label: 'Overview', icon: 'information-circle' },
@@ -50,26 +89,8 @@ export default function ProjectDetailScreen({ route, navigation }: any) {
             Description
           </Text>
           <Text style={[styles.description, { color: theme.colors.onSurfaceVariant }]}>
-            {project.description}
+            {project.description || 'No description available'}
           </Text>
-        </View>
-
-        <View style={[styles.divider, { backgroundColor: theme.colors.border }]} />
-
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>
-            Progress
-          </Text>
-          <View style={styles.progressContainer}>
-            <View style={[styles.progressBar, { backgroundColor: theme.colors.surfaceVariant }]}>
-              <View
-                style={[styles.progressFill, { backgroundColor: theme.colors.primary, width: `${project.progress}%` }]}
-              />
-            </View>
-            <Text style={[styles.progressText, { color: theme.colors.onSurface }]}>
-              {project.progress}%
-            </Text>
-          </View>
         </View>
 
         <View style={[styles.divider, { backgroundColor: theme.colors.border }]} />
@@ -80,15 +101,19 @@ export default function ProjectDetailScreen({ route, navigation }: any) {
           </Text>
           <View style={styles.detailRow}>
             <Text style={[styles.detailLabel, { color: theme.colors.onSurfaceVariant }]}>Status:</Text>
-            <StatusBadge status={project.status} />
+            <StatusBadge status={project.status || 'Active'} />
           </View>
           <View style={styles.detailRow}>
             <Text style={[styles.detailLabel, { color: theme.colors.onSurfaceVariant }]}>Start Date:</Text>
-            <Text style={[styles.detailValue, { color: theme.colors.onSurface }]}>{project.startDate}</Text>
+            <Text style={[styles.detailValue, { color: theme.colors.onSurface }]}>
+              {project.start_date ? new Date(project.start_date).toLocaleDateString() : 'Unknown'}
+            </Text>
           </View>
           <View style={styles.detailRow}>
             <Text style={[styles.detailLabel, { color: theme.colors.onSurfaceVariant }]}>Last Updated:</Text>
-            <Text style={[styles.detailValue, { color: theme.colors.onSurface }]}>{project.lastUpdated}</Text>
+            <Text style={[styles.detailValue, { color: theme.colors.onSurface }]}>
+              {project.updated_at ? new Date(project.updated_at).toLocaleDateString() : 'Unknown'}
+            </Text>
           </View>
         </View>
       </Card>
@@ -97,51 +122,38 @@ export default function ProjectDetailScreen({ route, navigation }: any) {
 
   const renderExperiments = () => (
     <ScrollView style={styles.tabContent}>
-      {project.experiments.map((experiment) => (
-        <ExperimentCard
-          key={experiment.id}
-          title={experiment.title}
-          status={experiment.status}
-          projectName={project.name}
-          date={experiment.date}
-          onPress={() => console.log('Navigate to experiment')}
-        />
-      ))}
+      {experiments.length > 0 ? (
+        experiments.map((experiment) => (
+          <ExperimentCard
+            key={experiment.id}
+            title={experiment.log_title || 'Untitled Experiment'}
+            status={experiment.status || 'PENDING'}
+            projectName={project.name || 'Unknown Project'}
+            date={experiment.timestamp ? new Date(experiment.timestamp).toLocaleDateString() : 'Unknown'}
+            onPress={() => navigation.navigate('ExperimentDetail', { experimentId: experiment.id })}
+          />
+        ))
+      ) : (
+        <Text style={[styles.emptyText, { color: theme.colors.onSurfaceVariant }]}>
+          No experiments yet
+        </Text>
+      )}
     </ScrollView>
   );
 
   const renderNotes = () => (
     <ScrollView style={styles.tabContent}>
-      {project.notes.map((note) => (
-        <Card key={note.id} elevation={0}>
-          <View style={styles.noteHeader}>
-            <Text style={[styles.noteTitle, { color: theme.colors.onSurface }]}>{note.title}</Text>
-            <Text style={[styles.noteDate, { color: theme.colors.onSurfaceVariant }]}>{note.date}</Text>
-          </View>
-          <Text style={[styles.noteContent, { color: theme.colors.onSurfaceVariant }]}>
-            {note.content}
-          </Text>
-        </Card>
-      ))}
+      <Text style={[styles.emptyText, { color: theme.colors.onSurfaceVariant }]}>
+        Notes feature coming soon
+      </Text>
     </ScrollView>
   );
 
   const renderTimeline = () => (
     <ScrollView style={styles.tabContent}>
-      {project.timeline.map((item, index) => (
-        <View key={item.id} style={styles.timelineItem}>
-          <View style={styles.timelineDot}>
-            <View style={[styles.timelineDotInner, { backgroundColor: theme.colors.primary }]} />
-          </View>
-          <View style={styles.timelineContent}>
-            <Text style={[styles.timelineEvent, { color: theme.colors.onSurface }]}>{item.event}</Text>
-            <Text style={[styles.timelineDate, { color: theme.colors.onSurfaceVariant }]}>{item.date}</Text>
-          </View>
-          {index < project.timeline.length - 1 && (
-            <View style={[styles.timelineLine, { backgroundColor: theme.colors.border }]} />
-          )}
-        </View>
-      ))}
+      <Text style={[styles.emptyText, { color: theme.colors.onSurfaceVariant }]}>
+        Timeline feature coming soon
+      </Text>
     </ScrollView>
   );
 
@@ -361,5 +373,19 @@ const styles = StyleSheet.create({
     top: 24,
     bottom: -24,
     width: 2,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#666',
+  },
+  emptyText: {
+    fontSize: 14,
+    textAlign: 'center',
+    paddingVertical: 16,
   },
 });

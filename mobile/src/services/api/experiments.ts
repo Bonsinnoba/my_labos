@@ -2,37 +2,31 @@ import apiClient from './client';
 import { offlineCache } from '../cache/offlineCache';
 
 export interface Experiment {
-  id: number;
-  title: string;
+  id: string;
+  log_title?: string;
+  log_text?: string;
   status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
-  project_id?: number;
+  project_id?: string;
   project_name?: string;
-  date?: string;
-  expected_outcome?: string;
-  actual_outcome?: string;
-  findings?: string;
+  timestamp?: string;
   created_at?: string;
   updated_at?: string;
 }
 
 export interface CreateExperimentRequest {
-  title: string;
+  log_title?: string;
+  log_text?: string;
   status?: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
-  project_id?: number;
-  date?: string;
-  expected_outcome?: string;
-  actual_outcome?: string;
-  findings?: string;
+  project_id?: string;
+  timestamp?: string;
 }
 
 export interface UpdateExperimentRequest {
-  title?: string;
+  log_title?: string;
+  log_text?: string;
   status?: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
-  project_id?: number;
-  date?: string;
-  expected_outcome?: string;
-  actual_outcome?: string;
-  findings?: string;
+  project_id?: string;
+  timestamp?: string;
 }
 
 export const experimentsApi = {
@@ -54,7 +48,7 @@ export const experimentsApi = {
   },
 
   // Get experiments by project ID
-  getByProject: async (projectId: number): Promise<Experiment[]> => {
+  getByProject: async (projectId: string): Promise<Experiment[]> => {
     try {
       return await apiClient.get<Experiment[]>(`/api/projects/${projectId}/experiments`);
     } catch (error) {
@@ -68,7 +62,7 @@ export const experimentsApi = {
   },
 
   // Get experiment by ID
-  getById: async (id: number): Promise<Experiment> => {
+  getById: async (id: string): Promise<Experiment> => {
     try {
       return await apiClient.get<Experiment>(`/api/experiments/${id}`);
     } catch (error) {
@@ -93,14 +87,14 @@ export const experimentsApi = {
   },
 
   // Update experiment
-  update: async (id: number, data: UpdateExperimentRequest): Promise<Experiment> => {
+  update: async (id: string, data: UpdateExperimentRequest): Promise<Experiment> => {
     const experiment = await apiClient.put<Experiment>(`/api/experiments/${id}`, data);
     await offlineCache.remove('experiments');
     return experiment;
   },
 
   // Delete experiment
-  delete: async (id: number): Promise<void> => {
+  delete: async (id: string): Promise<void> => {
     await apiClient.delete<void>(`/api/experiments/${id}`);
     await offlineCache.remove('experiments');
   },

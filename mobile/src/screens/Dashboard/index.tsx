@@ -229,20 +229,24 @@ export default function DashboardScreen({ navigation }: any) {
             </Text>
           </TouchableOpacity>
         </View>
-        <ExperimentCard
-          title="Voltage Stability Test"
-          status="PENDING"
-          projectName="Circuit Analysis"
-          date="Today"
-          onPress={() => navigation.navigate('ExperimentDetail', { experimentId: 1 })}
-        />
-        <ExperimentCard
-          title="Temperature Calibration"
-          status="PENDING"
-          projectName="Sensor Calibration"
-          date="Tomorrow"
-          onPress={() => navigation.navigate('ExperimentDetail', { experimentId: 2 })}
-        />
+        {loading ? (
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        ) : experiments.length > 0 ? (
+          experiments.map((experiment) => (
+            <ExperimentCard
+              key={experiment.id}
+              title={experiment.log_title || 'Untitled Experiment'}
+              status={experiment.status || 'PENDING'}
+              projectName={experiment.project_name || 'Unknown Project'}
+              date={experiment.timestamp ? new Date(experiment.timestamp).toLocaleDateString() : 'Unknown'}
+              onPress={() => navigation.navigate('ExperimentDetail', { experimentId: experiment.id })}
+            />
+          ))
+        ) : (
+          <Text style={[styles.emptyText, { color: theme.colors.onSurfaceVariant }]}>
+            No experiments yet
+          </Text>
+        )}
       </View>
 
       <View style={styles.footer} />

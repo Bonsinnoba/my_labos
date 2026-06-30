@@ -2,11 +2,11 @@ import apiClient from './client';
 import { offlineCache } from '../cache/offlineCache';
 
 export interface Finding {
-  id: number;
+  id: string;
   title: string;
   severity: 'HIGH' | 'MEDIUM' | 'LOW';
   status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
-  experiment_id?: number;
+  experiment_id?: string;
   experiment_name?: string;
   date?: string;
   description?: string;
@@ -22,7 +22,7 @@ export interface CreateFindingRequest {
   title: string;
   severity: 'HIGH' | 'MEDIUM' | 'LOW';
   status?: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
-  experiment_id?: number;
+  experiment_id?: string;
   date?: string;
   description?: string;
   root_cause?: string;
@@ -35,7 +35,7 @@ export interface UpdateFindingRequest {
   title?: string;
   severity?: 'HIGH' | 'MEDIUM' | 'LOW';
   status?: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
-  experiment_id?: number;
+  experiment_id?: string;
   date?: string;
   description?: string;
   root_cause?: string;
@@ -64,7 +64,7 @@ export const findingsApi = {
   },
 
   // Get findings by experiment ID
-  getByExperiment: async (experimentId: number): Promise<Finding[]> => {
+  getByExperiment: async (experimentId: string): Promise<Finding[]> => {
     try {
       return await apiClient.get<Finding[]>(`/api/experiments/${experimentId}/findings`);
     } catch (error) {
@@ -92,7 +92,7 @@ export const findingsApi = {
   },
 
   // Get finding by ID
-  getById: async (id: number): Promise<Finding> => {
+  getById: async (id: string): Promise<Finding> => {
     try {
       return await apiClient.get<Finding>(`/api/findings/${id}`);
     } catch (error) {
@@ -117,20 +117,20 @@ export const findingsApi = {
   },
 
   // Update finding
-  update: async (id: number, data: UpdateFindingRequest): Promise<Finding> => {
+  update: async (id: string, data: UpdateFindingRequest): Promise<Finding> => {
     const finding = await apiClient.put<Finding>(`/api/findings/${id}`, data);
     await offlineCache.remove('findings');
     return finding;
   },
 
   // Delete finding
-  delete: async (id: number): Promise<void> => {
+  delete: async (id: string): Promise<void> => {
     await apiClient.delete<void>(`/api/findings/${id}`);
     await offlineCache.remove('findings');
   },
 
   // Update finding status
-  updateStatus: async (id: number, status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED'): Promise<Finding> => {
+  updateStatus: async (id: string, status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED'): Promise<Finding> => {
     const finding = await apiClient.patch<Finding>(`/api/findings/${id}/status`, { status });
     await offlineCache.remove('findings');
     return finding;

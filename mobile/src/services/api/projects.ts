@@ -2,7 +2,7 @@ import apiClient from './client';
 import { offlineCache } from '../cache/offlineCache';
 
 export interface Project {
-  id: number;
+  id: string;
   name: string;
   description?: string;
   status: 'Active' | 'Completed' | 'Paused';
@@ -48,7 +48,7 @@ export const projectsApi = {
   },
 
   // Get project by ID
-  getById: async (id: number): Promise<Project> => {
+  getById: async (id: string): Promise<Project> => {
     try {
       const response = await apiClient.get<{success: boolean, data: Project}>(`/api/projects/${id}`);
       return response.data;
@@ -74,14 +74,14 @@ export const projectsApi = {
   },
 
   // Update project
-  update: async (id: number, data: UpdateProjectRequest): Promise<Project> => {
+  update: async (id: string, data: UpdateProjectRequest): Promise<Project> => {
     const project = await apiClient.put<Project>(`/api/projects/${id}`, data);
     await offlineCache.remove('projects');
     return project;
   },
 
   // Delete project
-  delete: async (id: number): Promise<void> => {
+  delete: async (id: string): Promise<void> => {
     await apiClient.delete<void>(`/api/projects/${id}`);
     await offlineCache.remove('projects');
   },
