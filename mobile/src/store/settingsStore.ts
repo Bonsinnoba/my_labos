@@ -5,7 +5,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 interface SettingsState {
   // Sync settings
   autoSync: boolean;
-  syncInterval: number;
   
   // Notification settings
   pushNotifications: boolean;
@@ -22,7 +21,6 @@ interface SettingsState {
   
   // Actions
   setAutoSync: (value: boolean) => void;
-  setSyncInterval: (value: number) => void;
   setPushNotifications: (value: boolean) => void;
   setEmailNotifications: (value: boolean) => void;
   setUserName: (name: string) => void;
@@ -33,7 +31,6 @@ interface SettingsState {
 
 const defaultSettings = {
   autoSync: true,
-  syncInterval: 5,
   pushNotifications: true,
   emailNotifications: false,
   userName: 'Dr. Smith',
@@ -47,7 +44,6 @@ export const useSettingsStore = create<SettingsState>()(
       ...defaultSettings,
       
       setAutoSync: (value) => set({ autoSync: value }),
-      setSyncInterval: (value) => set({ syncInterval: value }),
       setPushNotifications: (value) => set({ pushNotifications: value }),
       setEmailNotifications: (value) => set({ emailNotifications: value }),
       setUserName: (name) => set({ userName: name }),

@@ -10,6 +10,7 @@ import HelpScreen from '../screens/Settings/HelpScreen';
 import PINSetupScreen from '../screens/Settings/PINSetupScreen';
 import SearchScreen from '../screens/Search';
 import PINLockScreen from '../screens/Settings/PINLockScreen';
+import ResourcesScreen from '../screens/Resources';
 
 const Stack = createStackNavigator();
 
@@ -75,6 +76,11 @@ export default function AppNavigator() {
         name="Search"
         component={SearchScreen}
         options={{ title: 'Search' }}
+      />
+      <Stack.Screen
+        name="Resources"
+        component={ResourcesScreen}
+        options={{ title: 'Resources' }}
       />
     </Stack.Navigator>
   );

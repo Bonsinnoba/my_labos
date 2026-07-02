@@ -9,12 +9,22 @@ export interface SyncConfig {
   lastSync: string | null;
 }
 
+const DEFAULT_SYNC_CONFIG: SyncConfig = {
+  enabled: true,
+  interval: 300000,
+  lastSync: null,
+};
+
 export class SyncService {
   private static instance: SyncService;
   private syncInterval: NodeJS.Timeout | null = null;
   private isSyncing = false;
 
-  private constructor() {}
+  private constructor() {
+    this.initialize().catch((error) => {
+      console.error('[SyncService] Initialization failed:', error);
+    });
+  }
 
   static getInstance(): SyncService {
     if (!SyncService.instance) {
@@ -23,13 +33,20 @@ export class SyncService {
     return SyncService.instance;
   }
 
+  private async initialize(): Promise<void> {
+    const config = await this.getSyncConfig();
+    if (config.enabled) {
+      this.startAutoSync();
+    }
+  }
+
   async getSyncConfig(): Promise<SyncConfig> {
     try {
       const config = await AsyncStorage.getItem('@sync_config');
-      return config ? JSON.parse(config) : { enabled: false, interval: 3600000, lastSync: null };
+      return config ? JSON.parse(config) : DEFAULT_SYNC_CONFIG;
     } catch (error) {
       console.error('Error getting sync config:', error);
-      return { enabled: false, interval: 3600000, lastSync: null };
+      return DEFAULT_SYNC_CONFIG;
     }
   }
 

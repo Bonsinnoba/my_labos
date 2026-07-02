@@ -1,4 +1,6 @@
 import apiClient from './client';
+import { offlineCache } from '../cache/offlineCache';
+import { getNotes } from '../api';
 
 // Types
 export interface Project {
@@ -30,15 +32,18 @@ export interface Resource {
 }
 
 export interface NotebookEntry {
-  id: number;
+  id: number | string;
   title: string;
   content: string;
   entry_type: string;
-  project_id?: number;
-  experiment_id?: number;
+  project_id?: number | string;
+  experiment_id?: number | string;
   tags?: string[];
   attachments?: string[];
+  voice_transcription?: string;
   created_at: string;
+  updated_at?: string;
+  pendingSync?: boolean;
 }
 
 export interface SyncTransaction {
@@ -129,12 +134,61 @@ export const resourcesApi = {
 
 // Notebook API (Mobile)
 export const notebookApi = {
+  getAll: async (params?: { project_id?: number; experiment_id?: number; limit?: number }): Promise<NotebookEntry[]> => {
+    try {
+      const response = await apiClient.get<any>('/api/notebook', params);
+      console.log('[notebookApi] getAll response', response);
+      const entries = Array.isArray(response?.entries) ? response.entries : [];
+      await offlineCache.set('notebook_entries', entries);
+      return entries;
+    } catch (error) {
+      console.error('[notebookApi] getAll failed', error, 'baseURL=', apiClient.getBaseURL());
+
+      try {
+        console.log('[notebookApi] Falling back to Supabase cloud notebook fetch');
+        let cloudEntries = await getNotes();
+        if (!Array.isArray(cloudEntries)) {
+          cloudEntries = [];
+        }
+        if (params?.project_id) {
+          cloudEntries = cloudEntries.filter((entry) => String(entry.project_id) === String(params.project_id));
+        }
+        if (params?.experiment_id) {
+          cloudEntries = cloudEntries.filter((entry) => String(entry.experiment_id) === String(params.experiment_id));
+        }
+        if (params?.limit) {
+          cloudEntries = cloudEntries.slice(0, params.limit);
+        }
+        await offlineCache.set('notebook_entries', cloudEntries);
+        return cloudEntries;
+      } catch (cloudError) {
+        console.error('[notebookApi] Supabase fallback failed', cloudError);
+        const cachedEntries = await offlineCache.get<NotebookEntry[]>('notebook_entries');
+        if (cachedEntries) {
+          console.log('[notebookApi] Returning cached notebook entries due to offline mode');
+          return cachedEntries;
+        }
+        throw error;
+      }
+    }
+  },
+
   create: async (data: Partial<NotebookEntry>): Promise<{ entry_id: number }> => {
     return apiClient.post<{ entry_id: number }>('/api/notebook/mobile', data);
   },
 
   getById: async (id: number): Promise<{ data: NotebookEntry }> => {
-    return apiClient.get<{ data: NotebookEntry }>(`/api/notebook/mobile/${id}`);
+    try {
+      return await apiClient.get<{ data: NotebookEntry }>(`/api/notebook/mobile/${id}`);
+    } catch (error) {
+      console.error('[notebookApi] getById failed', error, 'baseURL=', apiClient.getBaseURL());
+      const cachedEntries = await offlineCache.get<NotebookEntry[]>('notebook_entries');
+      const cachedEntry = cachedEntries?.find((entry) => entry.id === id);
+      if (cachedEntry) {
+        return { data: cachedEntry };
+      }
+      throw error;
+    }
   },
 
   update: async (id: number, data: Partial<NotebookEntry>): Promise<{ success: boolean }> => {

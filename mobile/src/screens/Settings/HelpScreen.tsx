@@ -10,7 +10,7 @@ export default function HelpScreen() {
   const faqData = [
     {
       question: 'How do I sync my data?',
-      answer: 'Data syncs automatically based on your sync interval settings. You can also manually sync by tapping the "Sync Now" button in the Settings screen.',
+      answer: 'Data syncs automatically in the background and is also triggered by live actions like saving or deleting content.',
     },
     {
       question: 'What happens when I\'m offline?',

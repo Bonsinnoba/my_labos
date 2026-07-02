@@ -345,6 +345,9 @@ def sync_loop():
                 mesh_coordinator.check_network_status()
                 
                 if mesh_coordinator.is_online:
+                    # Keep Supabase connection alive to prevent free-tier suspension
+                    mesh_coordinator._keep_supabase_alive()
+                    
                     # Pull from B2
                     applied_count = mesh_coordinator.pull_from_cloud()
                     

@@ -20,14 +20,12 @@ export default function SettingsScreen({ navigation }: any) {
   // Use settings store
   const {
     autoSync,
-    syncInterval,
     pushNotifications,
     emailNotifications,
     userName,
     themeColor,
     apiBaseUrl,
     setAutoSync,
-    setSyncInterval,
     setPushNotifications,
     setEmailNotifications,
     setUserName,
@@ -39,7 +37,6 @@ export default function SettingsScreen({ navigation }: any) {
   const [showApiInput, setShowApiInput] = React.useState(false);
   const [showCloudConfig, setShowCloudConfig] = React.useState(false);
   const [showThemeColorPicker, setShowThemeColorPicker] = React.useState(false);
-  const [showSyncIntervalPicker, setShowSyncIntervalPicker] = React.useState(false);
   const [showProfile, setShowProfile] = React.useState(false);
   const [hasPin, setHasPin] = React.useState(false);
   const [pinEnabled, setPinEnabled] = React.useState(false);
@@ -170,41 +167,12 @@ export default function SettingsScreen({ navigation }: any) {
     );
   };
 
-  const handleManualSync = async () => {
-    try {
-      const result = await syncService.syncNow();
-      if (result.success) {
-        Alert.alert('Sync Complete', result.message);
-        // Update last sync time in app store
-        useAppStore.getState().setLastSync(Date.now());
-      } else {
-        Alert.alert('Sync Failed', result.message);
-      }
-    } catch (error) {
-      Alert.alert('Sync Error', 'An error occurred during sync');
-    }
-  };
-
   const handleAutoSyncToggle = async (value: boolean) => {
     setAutoSync(value);
     try {
       await syncService.toggleSync(value);
-      // Convert minutes to milliseconds for syncService
-      const intervalMs = syncInterval * 60 * 1000;
-      await syncService.updateSyncInterval(intervalMs);
     } catch (error) {
       console.error('Error toggling auto-sync:', error);
-    }
-  };
-
-  const handleSyncIntervalChange = async (value: number) => {
-    setSyncInterval(value);
-    try {
-      // Convert minutes to milliseconds for syncService
-      const intervalMs = value * 60 * 1000;
-      await syncService.updateSyncInterval(intervalMs);
-    } catch (error) {
-      console.error('Error updating sync interval:', error);
     }
   };
 
@@ -361,19 +329,6 @@ export default function SettingsScreen({ navigation }: any) {
           value: autoSync,
           onValueChange: handleAutoSyncToggle,
         },
-        {
-          icon: 'time',
-          label: 'Sync Interval',
-          type: 'navigation',
-          value: `${syncInterval} minutes`,
-          onPress: () => setShowSyncIntervalPicker(true),
-        },
-        {
-          icon: 'cloud-upload',
-          label: 'Sync Now',
-          type: 'button',
-          onPress: () => handleManualSync(),
-        },
       ],
     },
     {
@@ -528,13 +483,7 @@ export default function SettingsScreen({ navigation }: any) {
                 Last sync: {lastSync || 'Never'}
               </Text>
             </View>
-            <TouchableOpacity
-              style={[styles.syncButton, { backgroundColor: theme.colors.primary }]}
-              onPress={() => Alert.alert('Sync', 'Manual sync initiated')}
-            >
-              <Ionicons name="sync" size={20} color="white" />
-            </TouchableOpacity>
-          </View>
+            </View>
         </Card>
 
         {/* Settings Sections */}
@@ -631,47 +580,6 @@ export default function SettingsScreen({ navigation }: any) {
             <TouchableOpacity
               style={[styles.modalButton, styles.modalButtonCancel, { backgroundColor: theme.colors.surfaceVariant }]}
               onPress={() => setShowThemeColorPicker(false)}
-            >
-              <Text style={[styles.modalButtonText, { color: theme.colors.onSurface }]}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-
-      {/* Sync Interval Picker Modal */}
-      {showSyncIntervalPicker && (
-        <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: theme.colors.onSurface }]}>
-              Sync Interval
-            </Text>
-            {[1, 5, 10, 15, 30, 60].map((interval) => (
-              <TouchableOpacity
-                key={interval}
-                style={[
-                  styles.intervalOption,
-                  syncInterval === interval && { backgroundColor: theme.colors.primaryContainer }
-                ]}
-                onPress={() => {
-                  handleSyncIntervalChange(interval);
-                  setShowSyncIntervalPicker(false);
-                }}
-              >
-                <Text style={[
-                  styles.intervalText,
-                  { color: theme.colors.onSurface },
-                  syncInterval === interval && { color: theme.colors.primary }
-                ]}>
-                  {interval} minute{interval > 1 ? 's' : ''}
-                </Text>
-                {syncInterval === interval && (
-                  <Ionicons name="checkmark" size={20} color={theme.colors.primary} />
-                )}
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity
-              style={[styles.modalButton, styles.modalButtonCancel, { backgroundColor: theme.colors.surfaceVariant }]}
-              onPress={() => setShowSyncIntervalPicker(false)}
             >
               <Text style={[styles.modalButtonText, { color: theme.colors.onSurface }]}>Cancel</Text>
             </TouchableOpacity>

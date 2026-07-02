@@ -917,10 +917,13 @@ async def get_resources(project_id: Optional[int] = None):
         # Transform documents to resource format
         resources = []
         for doc in docs:
+            file_type = doc.get('file_type', 'other')
+            # Convert file_type to uppercase to match mobile app enum
+            file_type_upper = file_type.upper() if file_type else 'OTHER'
             resources.append({
                 'id': doc['id'],
                 'title': doc.get('title', ''),
-                'type': doc.get('file_type', 'OTHER'),
+                'type': file_type_upper,
                 'size': doc.get('file_size'),
                 'file_path': doc.get('file_path'),
                 'cloud_file_url': doc.get('cloud_file_url'),
@@ -946,10 +949,13 @@ async def get_project_resources(project_id: int):
         # Transform documents to resource format
         resources = []
         for doc in docs:
+            file_type = doc.get('file_type', 'other')
+            # Convert file_type to uppercase to match mobile app enum
+            file_type_upper = file_type.upper() if file_type else 'OTHER'
             resources.append({
                 'id': doc['id'],
                 'title': doc.get('title', ''),
-                'type': doc.get('file_type', 'OTHER'),
+                'type': file_type_upper,
                 'size': doc.get('file_size'),
                 'file_path': doc.get('file_path'),
                 'cloud_file_url': doc.get('cloud_file_url'),
@@ -974,10 +980,13 @@ async def get_resource(resource_id: int):
         if not doc:
             raise HTTPException(status_code=404, detail="Resource not found")
         
+        file_type = doc.get('file_type', 'other')
+        # Convert file_type to uppercase to match mobile app enum
+        file_type_upper = file_type.upper() if file_type else 'OTHER'
         return {
             'id': doc['id'],
             'title': doc.get('title', ''),
-            'type': doc.get('file_type', 'OTHER'),
+            'type': file_type_upper,
             'size': doc.get('file_size'),
             'file_path': doc.get('file_path'),
             'cloud_file_url': doc.get('cloud_file_url'),

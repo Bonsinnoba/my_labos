@@ -36,6 +36,150 @@ except ImportError:
     SUPABASE_AVAILABLE = False
     print("[mesh_sync] supabase not available - Supabase mirroring will be disabled")
 
+from typing import Union
+
+# Columns to exclude from all tables when mirroring to Supabase
+GLOBAL_EXCLUDE_COLUMNS = ['created_by', 'edited_by', 'edited_at', 'is_synced']
+
+# Foreign key mappings for UUID resolution: table -> [(foreign_key_column, reference_table)]
+FOREIGN_KEY_MAPPINGS = {
+    'rd_logs': [('project_id', 'projects'), ('stage_id', 'project_stages')],
+    'knowledge_vault': [
+        ('project_id', 'projects'),
+        ('component_id', 'components'),
+        ('equipment_id', 'equipment'),
+        ('experiment_id', 'rd_logs'),
+        ('stage_id', 'project_stages')
+    ],
+    'findings': [
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs'),
+        ('stage_id', 'project_stages')
+    ],
+    'equipment_maintenance': [('equipment_id', 'equipment')],
+    'component_usage': [
+        ('component_id', 'components'),
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs')
+    ],
+    'equipment_usage': [
+        ('equipment_id', 'equipment'),
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs')
+    ],
+    'tool_usage': [
+        ('tool_id', 'tools'),
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs')
+    ],
+    'material_usage': [
+        ('material_id', 'materials'),
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs')
+    ],
+    'usage_logs': [
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs'),
+        ('stage_id', 'experiment_stages'),
+        ('user_id', 'users')
+    ],
+    'project_stages': [('project_id', 'projects')],
+    'experiment_stages': [('experiment_id', 'rd_logs')],
+    'notebook_entries': [
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs')
+    ],
+    'calculations': [
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs')
+    ],
+    'purchases': [('funding_id', 'funding_sources')],
+    'maintenance_costs': [
+        ('funding_source_id', 'funding_sources')
+    ],
+    'gains': [('funding_id', 'funding_sources')]
+}
+
+def get_deterministic_uuid(table_name: str, local_id: Any) -> str:
+    """Generate a deterministic UUID v5 from table name and local ID."""
+    if not local_id:
+        return None
+    
+    # Standardize table name (e.g. rd_logs vs experiments)
+    normalized_table = 'rd_logs' if table_name == 'experiments' else table_name
+    
+    # If the local_id is already a valid UUID string, return it as is
+    if isinstance(local_id, str):
+        try:
+            uuid.UUID(local_id)
+            return local_id
+        except ValueError:
+            pass
+            
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{normalized_table}:{local_id}"))
+
+def normalize_type_to_table(source_type: str) -> str:
+    """Normalize source/target types in relationships to actual table names."""
+    type_map = {
+        'project': 'projects',
+        'experiment': 'rd_logs',
+        'log': 'rd_logs',
+        'finding': 'findings',
+        'component': 'components',
+        'tool': 'tools',
+        'material': 'materials',
+        'equipment': 'equipment',
+        'notebook': 'notebook_entries'
+    }
+    return type_map.get(source_type.lower(), source_type)
+
+def normalize_date_to_iso(date_str: Any) -> Optional[str]:
+    """Normalize date/time strings from DD-MM-YYYY to YYYY-MM-DD or ISO format for PostgreSQL."""
+    if not date_str:
+        return None
+    if not isinstance(date_str, str):
+        return date_str
+    
+    date_str = date_str.strip()
+    if not date_str:
+        return None
+        
+    # List of formats to try parsing
+    formats = [
+        '%d-%m-%Y %H:%M:%S',
+        '%d-%m-%Y %H:%M',
+        '%d-%m-%Y',
+        '%Y-%m-%d %H:%M:%S',
+        '%Y-%m-%d %H:%M',
+        '%Y-%m-%d'
+    ]
+    
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(date_str, fmt)
+            # Return in ISO format
+            return dt.isoformat()
+        except ValueError:
+            continue
+            
+    # Return as-is if no format matches
+    return date_str
+
+def get_local_id_from_uuid(cursor: sqlite3.Cursor, table_name: str, uuid_val: str) -> Optional[int]:
+    """Find the local SQLite integer ID that hashes to the given UUID v5."""
+    if not uuid_val:
+        return None
+    try:
+        normalized_table = 'rd_logs' if table_name == 'experiments' else table_name
+        cursor.execute(f"SELECT id FROM {normalized_table}")
+        for row in cursor.fetchall():
+            local_id = row[0]
+            if get_deterministic_uuid(normalized_table, local_id) == uuid_val:
+                return local_id
+    except Exception as e:
+        print(f"[mesh_sync] Error mapping UUID back to local ID: {e}")
+    return None
+
 
 class MeshSyncCoordinator:
     """
@@ -304,12 +448,64 @@ class MeshSyncCoordinator:
             for tx in transactions:
                 table_name = tx['table_name']
                 operation = tx['operation']
+                
+                # Exclude mesh_transactions or audit logs from mirroring directly
+                if table_name in ('mesh_transactions', 'audit_log'):
+                    continue
+                
                 payload = tx['payload'].copy()
                 
                 # Remove internal tracking fields
                 payload.pop('_record_id', None)
                 
+                # Clean globally excluded columns
+                for col in GLOBAL_EXCLUDE_COLUMNS:
+                    payload.pop(col, None)
+                
+                # Map last_updated to updated_at if present
+                if 'last_updated' in payload:
+                    payload['updated_at'] = payload.pop('last_updated')
+                
+                # Standardize timestamps: normalize DD-MM-YYYY → ISO, nullify blanks
+                for key, value in list(payload.items()):
+                    if 'date' in key.lower() or 'time' in key.lower() or key in ['timestamp', 'created_at', 'updated_at']:
+                        if value == '' or value is None:
+                            payload[key] = None
+                        else:
+                            payload[key] = normalize_date_to_iso(value)
+                
                 if operation in ('INSERT', 'UPDATE'):
+                    # Map primary key to UUID
+                    if 'id' in payload:
+                        payload['id'] = get_deterministic_uuid(table_name, payload['id'])
+                    
+                    # Handle foreign keys mapping
+                    if table_name in FOREIGN_KEY_MAPPINGS:
+                        for fk_col, ref_table in FOREIGN_KEY_MAPPINGS[table_name]:
+                            if fk_col in payload and payload[fk_col]:
+                                payload[fk_col] = get_deterministic_uuid(ref_table, payload[fk_col])
+                    
+                    # Special handling for relationships table
+                    if table_name == 'relationships':
+                        if payload.get('source_type') and payload.get('source_id'):
+                            ref_t = normalize_type_to_table(payload['source_type'])
+                            payload['source_id'] = get_deterministic_uuid(ref_t, payload['source_id'])
+                        if payload.get('target_type') and payload.get('target_id'):
+                            ref_t = normalize_type_to_table(payload['target_type'])
+                            payload['target_id'] = get_deterministic_uuid(ref_t, payload['target_id'])
+                    
+                    # Special handling for usage_logs table
+                    if table_name == 'usage_logs':
+                        if payload.get('entity_type') and payload.get('entity_id'):
+                            ref_t = normalize_type_to_table(payload['entity_type'])
+                            payload['entity_id'] = get_deterministic_uuid(ref_t, payload['entity_id'])
+                    
+                    # Special handling for maintenance_costs table
+                    if table_name == 'maintenance_costs':
+                        if payload.get('item_type') and payload.get('item_id'):
+                            ref_t = normalize_type_to_table(payload['item_type'])
+                            payload['item_id'] = get_deterministic_uuid(ref_t, payload['item_id'])
+                    
                     # Upsert to Supabase
                     try:
                         self.supabase_client.table(table_name).upsert(payload).execute()
@@ -320,14 +516,20 @@ class MeshSyncCoordinator:
                 elif operation == 'DELETE':
                     record_id = tx['payload'].get('_record_id')
                     if record_id is None:
-                        print(f"[mesh_sync] Warning: DELETE operation missing _record_id, skipping Supabase mirror")
+                        # Fallback to id if _record_id is not set
+                        record_id = tx['payload'].get('id')
+                    if record_id is None:
+                        print(f"[mesh_sync] Warning: DELETE operation missing id/_record_id, skipping Supabase mirror")
                         continue
+                    
+                    # Map record_id to deterministic UUID
+                    uuid_record_id = get_deterministic_uuid(table_name, record_id)
                     
                     try:
                         # Check if table has is_tombstone column for soft delete
                         # For Supabase, we always use soft delete via is_tombstone
-                        self.supabase_client.table(table_name).update({'is_tombstone': 1}).eq('id', record_id).execute()
-                        print(f"[mesh_sync] Mirrored soft DELETE to Supabase: {table_name} id={record_id}")
+                        self.supabase_client.table(table_name).update({'is_tombstone': 1}).eq('id', uuid_record_id).execute()
+                        print(f"[mesh_sync] Mirrored soft DELETE to Supabase: {table_name} id={uuid_record_id}")
                     except Exception as e:
                         print(f"[mesh_sync] Warning: Failed to mirror DELETE to {table_name}: {e}")
             
@@ -464,10 +666,21 @@ class MeshSyncCoordinator:
             
             for note in response.data:
                 try:
+                    cursor = self.conn.cursor()
                     # Convert note to mesh transaction format
                     # Remove Supabase-specific fields
                     note_payload = {k: v for k, v in note.items() 
                                    if k not in ['id', 'created_at', 'updated_at', 'source']}
+                    
+                    # Map project_id UUID back to local integer ID
+                    if 'project_id' in note_payload and note_payload['project_id']:
+                        local_proj_id = get_local_id_from_uuid(cursor, 'projects', note_payload['project_id'])
+                        note_payload['project_id'] = local_proj_id
+                    
+                    # Map experiment_id UUID back to local integer ID
+                    if 'experiment_id' in note_payload and note_payload['experiment_id']:
+                        local_exp_id = get_local_id_from_uuid(cursor, 'rd_logs', note_payload['experiment_id'])
+                        note_payload['experiment_id'] = local_exp_id
                     
                     # Log as INSERT mutation with device_origin='MOBILE'
                     # We use a special device_origin to indicate mobile source
@@ -479,7 +692,6 @@ class MeshSyncCoordinator:
                     )
                     
                     # Update the transaction to mark it as from mobile
-                    cursor = self.conn.cursor()
                     cursor.execute("""
                         UPDATE mesh_transactions
                         SET device_origin = 'MOBILE'

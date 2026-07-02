@@ -8,6 +8,7 @@ export interface Resource {
   size?: string;
   file_path?: string;
   cloud_file_url?: string;
+  thumbnail_url?: string;
   date?: string;
   uploaded_by?: string;
   project_id?: number;

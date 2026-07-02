@@ -1,15 +1,19 @@
 """
-One-time backfill script: local SQLite → Supabase
-Reads every row from every structured table in local_cache.db and upserts to Supabase
+Idempotent backfill script: local SQLite → Supabase
+Reads every row from every structured table in local_cache.db and upserts to Supabase in batches of 100.
+Uses deterministic UUID mapping (UUID v5) for 100% idempotency.
 """
 import os
 import sqlite3
-from supabase import create_client
 import uuid
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+from supabase import create_client
 from dotenv import load_dotenv
 
 # Load environment variables from .env file if it exists
-load_dotenv()
+dotenv_path = r"c:\Users\balik\Iven\my_lab\.env"
+load_dotenv(dotenv_path=dotenv_path)
 
 # Configuration
 DB_PATH = os.getenv("DATABASE_PATH", "local_cache.db")
@@ -19,7 +23,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 # Structured tables to backfill (excluding mesh_transactions and audit tables)
 STRUCTURED_TABLES = [
     'projects',
-    'experiments',  # rd_logs
+    'rd_logs',
     'knowledge_vault',
     'findings',
     'components',
@@ -36,75 +40,172 @@ STRUCTURED_TABLES = [
     'experiment_stages',
     'notebook_entries',
     'calculations',
-    'relationships',
     'funding_sources',
     'purchases',
     'maintenance_costs',
     'gains'
 ]
 
-# Columns to exclude (exist in SQLite but not in Supabase schema)
+# Columns to exclude from all tables (exist in SQLite but not in Supabase schema)
+GLOBAL_EXCLUDE_COLUMNS = ['created_by', 'edited_by', 'edited_at', 'is_synced']
+
+# Table-specific columns to exclude
 EXCLUDED_COLUMNS = {
-    'experiments': ['cloud_file_url'],
-    'components': ['last_updated'],
-    'funding_sources': ['last_updated']
+    # Add table-specific exclusions here if any
 }
 
-# Foreign key mappings: table -> (foreign_key_column, reference_table)
+# Foreign key mappings: table -> [(foreign_key_column, reference_table)]
 FOREIGN_KEY_MAPPINGS = {
-    'experiments': [('project_id', 'projects')],
-    'knowledge_vault': [('project_id', 'projects'), ('experiment_id', 'experiments')],
-    'findings': [('project_id', 'projects'), ('experiment_id', 'experiments')],
-    'component_usage': [('project_id', 'projects'), ('experiment_id', 'experiments')],
-    'equipment_usage': [('project_id', 'projects'), ('experiment_id', 'experiments')],
-    'tool_usage': [('project_id', 'projects'), ('experiment_id', 'experiments')],
-    'material_usage': [('project_id', 'projects'), ('experiment_id', 'experiments')],
-    'usage_logs': [('project_id', 'projects'), ('experiment_id', 'experiments')],
+    'rd_logs': [('project_id', 'projects'), ('stage_id', 'project_stages')],
+    'knowledge_vault': [
+        ('project_id', 'projects'),
+        ('component_id', 'components'),
+        ('equipment_id', 'equipment'),
+        ('experiment_id', 'rd_logs'),
+        ('stage_id', 'project_stages')
+    ],
+    'findings': [
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs'),
+        ('stage_id', 'project_stages')
+    ],
+    'equipment_maintenance': [('equipment_id', 'equipment')],
+    'component_usage': [
+        ('component_id', 'components'),
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs')
+    ],
+    'equipment_usage': [
+        ('equipment_id', 'equipment'),
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs')
+    ],
+    'tool_usage': [
+        ('tool_id', 'tools'),
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs')
+    ],
+    'material_usage': [
+        ('material_id', 'materials'),
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs')
+    ],
+    'usage_logs': [
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs'),
+        ('stage_id', 'experiment_stages'),
+        ('user_id', 'users')
+    ],
     'project_stages': [('project_id', 'projects')],
-    'experiment_stages': [('experiment_id', 'experiments')],
-    'equipment_maintenance': [('equipment_id', 'equipment')]
+    'experiment_stages': [('experiment_id', 'rd_logs')],
+    'notebook_entries': [
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs')
+    ],
+    'calculations': [
+        ('project_id', 'projects'),
+        ('experiment_id', 'rd_logs')
+    ],
+    'purchases': [('funding_id', 'funding_sources')],
+    'maintenance_costs': [
+        ('funding_source_id', 'funding_sources')
+    ],
+    'gains': [('funding_id', 'funding_sources')]
 }
 
-# Cache for UUID mappings to avoid repeated queries
-uuid_cache = {}
-
-def get_uuid_mapping(supabase, reference_table, local_id):
-    """Get UUID for a local ID from reference table."""
-    cache_key = f"{reference_table}:{local_id}"
-    if cache_key in uuid_cache:
-        return uuid_cache[cache_key]
+def get_deterministic_uuid(table_name: str, local_id: Any) -> str:
+    """
+    Generate a deterministic UUID v5 from a table name and a local ID.
+    Supports both integer IDs and string IDs (like existing UUIDs).
+    """
+    if not local_id:
+        return None
     
-    try:
-        # For projects, map by name
-        if reference_table == 'projects':
-            # Query local SQLite for project name
-            conn = sqlite3.connect(DB_PATH)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM projects WHERE id = ?", (local_id,))
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row:
-                project_name = row['name']
-                # Query Supabase for project UUID by name
-                response = supabase.table('projects').select('id').eq('name', project_name).execute()
-                if response.data:
-                    uuid_val = response.data[0]['id']
-                    uuid_cache[cache_key] = uuid_val
-                    return uuid_val
-        else:
-            # For other tables, we'd need a similar mapping strategy
-            # For now, return None to skip
+    # Standardize table name (e.g. rd_logs vs experiments)
+    normalized_table = 'rd_logs' if table_name == 'experiments' else table_name
+    
+    # If the local_id is already a valid UUID string, return it as is
+    if isinstance(local_id, str):
+        try:
+            uuid.UUID(local_id)
+            return local_id
+        except ValueError:
             pass
-    except Exception as e:
-        print(f"    Error mapping UUID for {reference_table} id {local_id}: {e}")
+            
+    # Generate UUID v5 using DNS namespace + f"{normalized_table}:{local_id}"
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{normalized_table}:{local_id}"))
+
+def normalize_type_to_table(source_type: str) -> str:
+    """Normalize source/target types in relationships to actual table names."""
+    type_map = {
+        'project': 'projects',
+        'experiment': 'rd_logs',
+        'log': 'rd_logs',
+        'finding': 'findings',
+        'component': 'components',
+        'tool': 'tools',
+        'material': 'materials',
+        'equipment': 'equipment',
+        'notebook': 'notebook_entries'
+    }
+    return type_map.get(source_type.lower(), source_type)
+
+def normalize_date_to_iso(date_str: Any) -> Optional[str]:
+    """Normalize date/time strings from DD-MM-YYYY to YYYY-MM-DD or ISO format for PostgreSQL."""
+    if not date_str:
+        return None
+    if not isinstance(date_str, str):
+        return date_str
     
-    return None
+    date_str = date_str.strip()
+    if not date_str:
+        return None
+        
+    # List of formats to try parsing
+    formats = [
+        '%d-%m-%Y %H:%M:%S',
+        '%d-%m-%Y %H:%M',
+        '%d-%m-%Y',
+        '%Y-%m-%d %H:%M:%S',
+        '%Y-%m-%d %H:%M',
+        '%Y-%m-%d'
+    ]
+    
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(date_str, fmt)
+            # Return in ISO format
+            return dt.isoformat()
+        except ValueError:
+            continue
+            
+    # Return as-is if no format matches
+    return date_str
+
+# Tables with NOT-NULL FK columns that must resolve against already-inserted parents.
+# Format: { child_table: [(fk_col, parent_table), ...] }
+REQUIRED_PARENTS = {
+    'project_stages':    [('project_id', 'projects')],
+    'experiment_stages': [('experiment_id', 'rd_logs')],
+    'usage_logs':        [('project_id', 'projects')],   # skip rows whose parent project is gone
+    'rd_logs':           [('project_id', 'projects')],   # nullable but skip if uuid unknown
+}
+
+def upsert_batch(supabase, table: str, batch: list) -> set:
+    """Upsert a batch and return the set of IDs that were successfully inserted."""
+    if not batch:
+        return set()
+    try:
+        supabase.table(table).upsert(batch).execute()
+        print(f"    Upserted batch of {len(batch)} rows to {table}")
+        return {row['id'] for row in batch}
+    except Exception as e:
+        print(f"    Error upserting batch: {e}")
+        return set()
 
 def main():
     if not SUPABASE_URL or not SUPABASE_KEY:
-        print("Error: SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
+        print("Error: SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in .env")
         return
     
     # Initialize Supabase client
@@ -123,70 +224,121 @@ def main():
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
     sqlite_tables = [row[0] for row in cursor.fetchall()]
     
-    print(f"Backfilling from {DB_PATH} to Supabase...")
+    print(f"Backfilling from {DB_PATH} to Supabase with deterministic UUIDs and batching...")
+    
+    # Track inserted UUIDs per table for parent-FK validation
+    inserted_uuids: Dict[str, set] = {t: set() for t in STRUCTURED_TABLES}
     
     for table in STRUCTURED_TABLES:
         # Check if table exists in SQLite
-        sqlite_table = table
-        if table == 'experiments':
-            sqlite_table = 'rd_logs'
-        
-        if sqlite_table not in sqlite_tables:
+        if table not in sqlite_tables:
             print(f"  Skipping {table} (not found in SQLite)")
             continue
         
         print(f"  Backfilling {table}...")
         
         try:
-            cursor.execute(f"SELECT * FROM {sqlite_table}")
+            cursor.execute(f"SELECT * FROM {table}")
             rows = cursor.fetchall()
             
             if not rows:
                 print(f"    No data in {table}")
                 continue
             
+            batch = []
+            skipped = 0
             for row in rows:
                 data = dict(row)
                 
-                # Remove excluded columns
+                # Remove globally excluded columns
+                for col in GLOBAL_EXCLUDE_COLUMNS:
+                    data.pop(col, None)
+                
+                # Remove table-specific excluded columns
                 if table in EXCLUDED_COLUMNS:
                     for col in EXCLUDED_COLUMNS[table]:
                         data.pop(col, None)
                 
-                # Generate UUID for id
-                data['id'] = str(uuid.uuid4())
+                # Map last_updated to updated_at if present
+                if 'last_updated' in data:
+                    data['updated_at'] = data.pop('last_updated')
+                
+                # Generate deterministic UUID for primary key
+                data['id'] = get_deterministic_uuid(table, data['id'])
                 
                 # Handle foreign key mappings
                 if table in FOREIGN_KEY_MAPPINGS:
                     for fk_col, ref_table in FOREIGN_KEY_MAPPINGS[table]:
                         if fk_col in data and data[fk_col]:
-                            # Try to map the foreign key to UUID
-                            mapped_uuid = get_uuid_mapping(supabase, ref_table, data[fk_col])
-                            if mapped_uuid:
-                                data[fk_col] = mapped_uuid
-                            else:
-                                # If mapping fails, set to None to avoid UUID errors
-                                data[fk_col] = None
+                            data[fk_col] = get_deterministic_uuid(ref_table, data[fk_col])
                 
-                # Handle empty/invalid timestamps
+                # Special handling for relationships table if it exists
+                if table == 'relationships':
+                    if data.get('source_type') and data.get('source_id'):
+                        ref_t = normalize_type_to_table(data['source_type'])
+                        data['source_id'] = get_deterministic_uuid(ref_t, data['source_id'])
+                    if data.get('target_type') and data.get('target_id'):
+                        ref_t = normalize_type_to_table(data['target_type'])
+                        data['target_id'] = get_deterministic_uuid(ref_t, data['target_id'])
+                
+                # Special handling for usage_logs table
+                if table == 'usage_logs':
+                    if data.get('entity_type') and data.get('entity_id'):
+                        ref_t = normalize_type_to_table(data['entity_type'])
+                        data['entity_id'] = get_deterministic_uuid(ref_t, data['entity_id'])
+                
+                # Special handling for maintenance_costs table
+                if table == 'maintenance_costs':
+                    if data.get('item_type') and data.get('item_id'):
+                        ref_t = normalize_type_to_table(data['item_type'])
+                        data['item_id'] = get_deterministic_uuid(ref_t, data['item_id'])
+                
+                # Normalize date/time columns to ISO format for PostgreSQL
                 for key, value in list(data.items()):
-                    if value == '' or value is None:
-                        # For timestamp columns, set to None instead of empty string
-                        if 'date' in key.lower() or 'time' in key.lower() or key in ['timestamp', 'created_at', 'updated_at']:
+                    if 'date' in key.lower() or 'time' in key.lower() or key in ['timestamp', 'created_at', 'updated_at']:
+                        if value == '' or value is None:
                             data[key] = None
+                        else:
+                            data[key] = normalize_date_to_iso(value)
                 
-                try:
-                    supabase.table(table).upsert(data).execute()
-                except Exception as e:
-                    print(f"    Error upserting row: {e}")
+                # --- Orphan-row guard ---
+                # Skip rows whose NOT NULL FK parents were never inserted (dangling references)
+                orphaned = False
+                if table in REQUIRED_PARENTS:
+                    for fk_col, parent_table in REQUIRED_PARENTS[table]:
+                        fk_val = data.get(fk_col)
+                        if fk_val and fk_val not in inserted_uuids.get(parent_table, set()):
+                            print(f"    Skipping orphaned row id={data['id']}: "
+                                  f"{fk_col}={fk_val} not found in {parent_table}")
+                            orphaned = True
+                            skipped += 1
+                            break
+                if orphaned:
+                    continue
+                
+                batch.append(data)
+                
+                if len(batch) >= 100:
+                    inserted_uuids[table] |= upsert_batch(supabase, table, batch)
+                    batch = []
             
-            print(f"    Backfilled {len(rows)} rows to {table}")
+            # Upsert remaining rows (upsert_batch prints its own confirmation)
+            if batch:
+                inserted_uuids[table] |= upsert_batch(supabase, table, batch)
+            
+            msg = f"    Successfully backfilled {len(rows) - skipped}/{len(rows)} rows to {table}"
+            if skipped:
+                msg += f" ({skipped} orphaned rows skipped)"
+            print(msg)
             
         except Exception as e:
             print(f"    Error backfilling {table}: {e}")
-    
+            import traceback
+            traceback.print_exc()
+            
     conn.close()
     print("Backfill complete!")
 
 if __name__ == "__main__":
     main()
+

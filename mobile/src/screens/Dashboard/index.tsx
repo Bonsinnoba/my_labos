@@ -65,6 +65,7 @@ export default function DashboardScreen({ navigation }: any) {
   const quickActions = [
     { id: 1, title: 'Add Note', icon: 'create', color: theme.colors.info },
     { id: 2, title: 'Search', icon: 'search', color: theme.colors.warning },
+    { id: 3, title: 'Resources', icon: 'document', color: theme.colors.primary },
   ];
 
   return (
@@ -132,6 +133,8 @@ export default function DashboardScreen({ navigation }: any) {
                     navigation.navigate('Notebook');
                   } else if (action.title === 'Search') {
                     navigation.navigate('Search');
+                  } else if (action.title === 'Resources') {
+                    navigation.navigate('Resources');
                   }
                 }}
               >

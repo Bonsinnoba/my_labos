@@ -1,19 +1,21 @@
+import { Platform } from 'react-native';
 import axios, { AxiosInstance, AxiosError, InternalAxiosRequestConfig, AxiosResponse } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { cloudClient } from '../cloud/cloudClient';
 
-const DEFAULT_API_BASE_URL = process.env.EXPO_PUBLIC_CLOUD_API_URL || process.env.CLOUD_API_URL || 'http://localhost:8000';
+const DEFAULT_LOCAL_API_BASE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://localhost:8000';
+const DEFAULT_CLOUD_API_BASE_URL = process.env.EXPO_PUBLIC_CLOUD_API_URL || process.env.CLOUD_API_URL || ''; 
 
 class ApiClient {
   private client: AxiosInstance;
   private baseURL: string;
-  private cloudMode: boolean = true;
+  private cloudMode: boolean = false;
+  private localApiUrl: string = process.env.EXPO_PUBLIC_API_BASE_URL || process.env.API_BASE_URL || '';
+  private cloudApiUrl: string = DEFAULT_CLOUD_API_BASE_URL;
+  private ready: Promise<void>;
 
   constructor() {
-    // Prioritize cloud API URL over local lab computer URL
-    const cloudApiUrl = process.env.EXPO_PUBLIC_CLOUD_API_URL || process.env.CLOUD_API_URL;
-    const localApiUrl = process.env.EXPO_PUBLIC_API_BASE_URL || process.env.API_BASE_URL;
-    this.baseURL = cloudApiUrl || localApiUrl || DEFAULT_API_BASE_URL;
+    this.baseURL = this.localApiUrl || DEFAULT_LOCAL_API_BASE_URL;
     this.client = axios.create({
       baseURL: this.baseURL,
       timeout: Number(process.env.EXPO_PUBLIC_API_TIMEOUT || process.env.API_TIMEOUT || 30000),
@@ -23,8 +25,12 @@ class ApiClient {
     });
 
     this.setupInterceptors();
-    this.loadApiUrl();
-    this.loadCloudMode();
+    this.ready = this.initialize();
+  }
+
+  private async initialize() {
+    await this.loadApiUrl();
+    await this.loadCloudMode();
   }
 
   private async loadApiUrl() {
@@ -41,6 +47,15 @@ class ApiClient {
       if (savedApiUrl) {
         this.baseURL = savedApiUrl;
         this.client.defaults.baseURL = savedApiUrl;
+        return;
+      }
+
+      if (this.localApiUrl) {
+        this.baseURL = this.localApiUrl;
+        this.client.defaults.baseURL = this.localApiUrl;
+      } else {
+        this.baseURL = DEFAULT_LOCAL_API_BASE_URL;
+        this.client.defaults.baseURL = DEFAULT_LOCAL_API_BASE_URL;
       }
     } catch (error) {
       console.error('Error loading API URL:', error);
@@ -48,8 +63,20 @@ class ApiClient {
   }
 
   private async loadCloudMode() {
-    this.cloudMode = true; // Always enable cloud mode
-    console.log(`[ApiClient] Cloud mode enforced: ${this.cloudMode}`);
+    try {
+      const savedCloudMode = await AsyncStorage.getItem('@cloud_enabled');
+      this.cloudMode = savedCloudMode === 'true';
+      if (this.cloudMode && this.cloudApiUrl) {
+        this.baseURL = this.cloudApiUrl;
+      } else {
+        const savedApiUrl = await AsyncStorage.getItem('@api_base_url');
+        this.baseURL = this.localApiUrl || savedApiUrl || DEFAULT_LOCAL_API_BASE_URL;
+      }
+      this.client.defaults.baseURL = this.baseURL;
+      console.log(`[ApiClient] Cloud mode loaded: ${this.cloudMode}, baseURL: ${this.baseURL}`);
+    } catch (error) {
+      console.error('Error loading cloud mode:', error);
+    }
   }
 
   public async updateBaseURL(newUrl: string) {
@@ -59,12 +86,25 @@ class ApiClient {
   }
 
   public async setCloudMode(enabled: boolean) {
-    this.cloudMode = true; // Always enable cloud mode
-    console.log(`[ApiClient] setCloudMode call ignored - cloud mode is enforced`);
+    this.cloudMode = enabled;
+    await AsyncStorage.setItem('@cloud_enabled', enabled ? 'true' : 'false');
+
+    if (enabled && this.cloudApiUrl) {
+      this.baseURL = this.cloudApiUrl;
+    } else {
+      const savedApiUrl = await AsyncStorage.getItem('@api_base_url');
+      this.baseURL = this.localApiUrl || savedApiUrl || DEFAULT_LOCAL_API_BASE_URL;
+    }
+    this.client.defaults.baseURL = this.baseURL;
+    console.log(`[ApiClient] setCloudMode: ${this.cloudMode}, baseURL: ${this.baseURL}`);
   }
 
   public isCloudMode(): boolean {
-    return true; // Enforced for direct cloud-only operation
+    return this.cloudMode;
+  }
+
+  public getBaseURL(): string {
+    return this.baseURL;
   }
 
   public async getCloudClient() {
@@ -110,32 +150,41 @@ class ApiClient {
     return this.client;
   }
 
+  private async ensureReady() {
+    await this.ready;
+  }
+
   // Generic GET request
   public async get<T>(url: string, params?: any): Promise<T> {
+    await this.ensureReady();
     const response = await this.client.get<T>(url, { params });
     return response.data;
   }
 
   // Generic POST request
   public async post<T>(url: string, data?: any): Promise<T> {
+    await this.ensureReady();
     const response = await this.client.post<T>(url, data);
     return response.data;
   }
 
   // Generic PUT request
   public async put<T>(url: string, data?: any): Promise<T> {
+    await this.ensureReady();
     const response = await this.client.put<T>(url, data);
     return response.data;
   }
 
   // Generic DELETE request
   public async delete<T>(url: string): Promise<T> {
+    await this.ensureReady();
     const response = await this.client.delete<T>(url);
     return response.data;
   }
 
   // Generic PATCH request
   public async patch<T>(url: string, data?: any): Promise<T> {
+    await this.ensureReady();
     const response = await this.client.patch<T>(url, data);
     return response.data;
   }

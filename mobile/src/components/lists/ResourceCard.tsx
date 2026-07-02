@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Image } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import Card from '../common/Card';
@@ -9,10 +9,11 @@ interface ResourceCardProps {
   type: string;
   size?: string;
   date?: string;
+  thumbnailUrl?: string;
   onPress: () => void;
 }
 
-export default function ResourceCard({ title, type, size, date, onPress }: ResourceCardProps) {
+export default function ResourceCard({ title, type, size, date, thumbnailUrl, onPress }: ResourceCardProps) {
   const theme = useTheme();
 
   const getIcon = () => {
@@ -27,9 +28,13 @@ export default function ResourceCard({ title, type, size, date, onPress }: Resou
   return (
     <Card onPress={onPress} elevation={1}>
       <View style={styles.header}>
-        <View style={styles.iconContainer}>
-          <Ionicons name={getIcon() as any} size={32} color={theme.colors.primary} />
-        </View>
+        {thumbnailUrl ? (
+          <Image source={{ uri: thumbnailUrl }} style={styles.thumbnail} resizeMode="cover" />
+        ) : (
+          <View style={styles.iconContainer}>
+            <Ionicons name={getIcon() as any} size={32} color={theme.colors.primary} />
+          </View>
+        )}
         <View style={styles.content}>
           <Text style={[styles.title, { color: theme.colors.onSurface }]} numberOfLines={2}>
             {title}
@@ -68,6 +73,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 107, 53, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
+    marginRight: 12,
+  },
+  thumbnail: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
     marginRight: 12,
   },
   content: {

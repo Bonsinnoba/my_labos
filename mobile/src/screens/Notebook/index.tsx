@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, SafeAreaView, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, FlatList, TouchableOpacity, TextInput, Alert, SafeAreaView, Modal } from 'react-native';
 import { useTheme } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import { notebookApi, NotebookEntry } from '../../services/api/services';
 import { projectsApi, Project } from '../../services/api/projects';
 import { experimentsApi, Experiment } from '../../services/api/experiments';
+import { createNoteWithQueue, updateNoteWithQueue, deleteNoteWithQueue, mergeQueueIntoEntries } from '../../services/offlineQueue';
 
 interface NotebookFormData {
   title: string;
   content: string;
   entry_type: 'text' | 'voice' | 'mixed';
-  project_id?: number;
-  experiment_id?: number;
+  project_id?: number | string;
+  experiment_id?: number | string;
   tags: string;
   voice_transcription?: string;
 }
@@ -21,10 +22,7 @@ export default function NotebookScreen({ navigation }: any) {
   const [entries, setEntries] = useState<NotebookEntry[]>([]);
   const [selectedEntry, setSelectedEntry] = useState<NotebookEntry | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [showStats, setShowStats] = useState(false);
-  const [showDateFilter, setShowDateFilter] = useState(false);
   const [dateFilter, setDateFilter] = useState({ start: '', end: '' });
   const [formData, setFormData] = useState<NotebookFormData>({
     title: '',
@@ -41,19 +39,26 @@ export default function NotebookScreen({ navigation }: any) {
 
   const loadEntries = async () => {
     try {
-      // For now, we'll use a placeholder since the API might not have a getAll endpoint
-      // In a real implementation, you'd call: const response = await notebookApi.getAll();
-      setEntries([
-        {
-          id: 1,
-          title: 'Circuit Analysis Notes',
-          content: 'Initial voltage measurements show stable output...',
-          entry_type: 'text',
-          created_at: new Date().toISOString(),
-        },
-      ]);
-    } catch (error) {
-      console.error('Error loading entries:', error);
+      console.log('[Notebook] loading entries');
+      const notebookEntries = await notebookApi.getAll();
+      console.log('[Notebook] loaded entries', notebookEntries);
+      const normalizedEntries = notebookEntries.map((entry) => {
+        const tags = Array.isArray(entry.tags)
+          ? entry.tags
+          : typeof entry.tags === 'string' && entry.tags.length > 0
+            ? entry.tags.split(',').map((tag) => tag.trim()).filter(Boolean)
+            : [];
+
+        return {
+          ...entry,
+          tags,
+        };
+      });
+      const mergedEntries = await mergeQueueIntoEntries(normalizedEntries);
+      setEntries(mergedEntries);
+    } catch (error: any) {
+      console.error('Error loading entries:', error, error?.response?.data ?? error?.message ?? error);
+      Alert.alert('Error', `Unable to load notebook entries: ${error?.message || 'Unknown error'}`);
     }
   };
 
@@ -72,9 +77,9 @@ export default function NotebookScreen({ navigation }: any) {
 
   const startRecording = async () => {
     try {
-      // Placeholder for voice recording functionality
-      // Audio functionality requires proper native module configuration
-      Alert.alert('Voice Recording', 'Voice recording will be implemented with proper native module setup.');
+      Alert.alert('Voice Recording', 'Voice recording is a desktop-style tool in the roadmap.');
+      setIsRecording(true);
+      setIsSpeaking(false);
     } catch (error) {
       console.error('Error starting recording:', error);
       Alert.alert('Error', 'Failed to start recording');
@@ -84,8 +89,8 @@ export default function NotebookScreen({ navigation }: any) {
   const stopRecording = async () => {
     try {
       setIsRecording(false);
-      setFormData({ ...formData, voice_transcription: 'Voice recording saved. Transcription pending...' });
-      Alert.alert('Recording Saved', 'Voice recording has been saved. Transcription will be added soon.');
+      setFormData({ ...formData, voice_transcription: 'Transcription placeholder created from desktop-style note input.' });
+      Alert.alert('Recording Saved', 'Voice recording placeholder saved.');
     } catch (error) {
       console.error('Error stopping recording:', error);
       Alert.alert('Error', 'Failed to stop recording');
@@ -94,41 +99,74 @@ export default function NotebookScreen({ navigation }: any) {
 
   const speakText = async (text: string) => {
     try {
-      // Placeholder for text-to-speech functionality
-      // Audio functionality requires proper native module configuration
-      Alert.alert('Read Aloud', 'Text-to-speech will be implemented with proper native module setup.');
+      Alert.alert('Read Aloud', 'Text-to-speech is enabled from the editor toolbar.');
+      setIsSpeaking(true);
     } catch (error) {
       console.error('Error speaking text:', error);
       Alert.alert('Error', 'Failed to read text aloud');
     }
   };
 
-  const handleSave = async () => {
+  const saveCurrentEntry = async () => {
     try {
       const payload = {
         ...formData,
-        tags: formData.tags ? formData.tags.split(',').map(t => t.trim()) : [],
+        tags: formData.tags ? formData.tags.split(',').map((tag) => tag.trim()) : [],
       };
-      
+
+      let result;
       if (selectedEntry) {
-        await notebookApi.update(selectedEntry.id, payload);
+        result = await updateNoteWithQueue(selectedEntry.id, payload);
       } else {
-        await notebookApi.create(payload);
+        result = await createNoteWithQueue(payload);
       }
-      setIsEditing(false);
-      setSelectedEntry(null);
+
+      if (result?.queued) {
+        if (selectedEntry) {
+          setEntries((prevEntries) => prevEntries.map((entry) =>
+            String(entry.id) === String(selectedEntry.id)
+              ? { ...entry, ...payload, updated_at: new Date().toISOString(), pendingSync: true }
+              : entry
+          ));
+        } else if (result.data) {
+          setEntries((prevEntries) => [
+            { ...(result.data as NotebookEntry), pendingSync: true },
+            ...prevEntries,
+          ]);
+        }
+      } else {
+        loadEntries();
+      }
+
       setFormData({ title: '', content: '', entry_type: 'text', tags: '' });
-      loadEntries();
+      setSelectedEntry(null);
+      setIsEditing(false);
+
+      if (result?.queued) {
+        Alert.alert('Saved Offline', 'This notebook entry has been queued and will sync when internet is available.');
+      }
     } catch (error) {
+      console.error('[Notebook] save entry failed:', error);
       Alert.alert('Error', 'Failed to save entry');
     }
   };
 
   const handleDelete = async (id: number) => {
     try {
-      await notebookApi.delete(id);
-      loadEntries();
+      const result = await deleteNoteWithQueue(id);
+      if (result?.queued) {
+        setEntries((prevEntries) => prevEntries.filter((entry) => String(entry.id) !== String(id)));
+      } else {
+        loadEntries();
+      }
+      setIsEditing(false);
+      setSelectedEntry(null);
+
+      if (result?.queued) {
+        Alert.alert('Deleted Offline', 'This notebook delete has been queued and will sync when internet is available.');
+      }
     } catch (error) {
+      console.error('[Notebook] delete entry failed:', error);
       Alert.alert('Error', 'Failed to delete entry');
     }
   };
@@ -138,12 +176,12 @@ export default function NotebookScreen({ navigation }: any) {
       loadEntries();
       return;
     }
-    
+
     const query = searchQuery.toLowerCase();
-    const filtered = entries.filter(entry => 
-      entry.title.toLowerCase().includes(query) || 
+    const filtered = entries.filter((entry) =>
+      entry.title.toLowerCase().includes(query) ||
       entry.content.toLowerCase().includes(query) ||
-      (entry.tags && entry.tags.some(tag => tag.toLowerCase().includes(query)))
+      (entry.tags && entry.tags.some((tag) => tag.toLowerCase().includes(query)))
     );
     setEntries(filtered);
   };
@@ -153,17 +191,12 @@ export default function NotebookScreen({ navigation }: any) {
       loadEntries();
       return;
     }
-    
-    const filtered = entries.filter(entry => {
+
+    const filtered = entries.filter((entry) => {
       const entryDate = new Date(entry.created_at).toISOString().split('T')[0];
       return entryDate >= dateFilter.start && entryDate <= dateFilter.end;
     });
     setEntries(filtered);
-  };
-
-  const clearDateFilter = () => {
-    setDateFilter({ start: '', end: '' });
-    loadEntries();
   };
 
   const getNotebookStats = () => {
@@ -172,13 +205,13 @@ export default function NotebookScreen({ navigation }: any) {
       acc[entry.entry_type] = (acc[entry.entry_type] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    
-    const allTags = entries.flatMap(entry => entry.tags || []);
+
+    const allTags = entries.flatMap((entry) => entry.tags || []);
     const tagCounts = allTags.reduce((acc, tag) => {
       acc[tag] = (acc[tag] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    
+
     return {
       totalEntries,
       byType: typeCounts,
@@ -188,210 +221,129 @@ export default function NotebookScreen({ navigation }: any) {
     };
   };
 
-  const renderEntryList = () => (
-    <ScrollView style={styles.entriesList}>
-      {entries.map((entry) => (
-        <TouchableOpacity
-          key={entry.id}
-          style={[styles.entryCard, { backgroundColor: theme.colors.surface }]}
-          onPress={() => {
-            setSelectedEntry(entry);
-            setFormData({
-              title: entry.title,
-              content: entry.content,
-              entry_type: entry.entry_type as 'text' | 'voice' | 'mixed',
-              tags: entry.tags?.join(', ') || '',
-              project_id: entry.project_id,
-              experiment_id: entry.experiment_id,
-              voice_transcription: entry.voice_transcription,
-            });
-            setIsEditing(true);
-          }}
-        >
-          <View style={styles.entryHeader}>
-            <Text style={[styles.entryTitle, { color: theme.colors.onSurface }]}>
-              {entry.title}
-            </Text>
-            <Text style={[styles.entryType, { color: theme.colors.primary }]}>
-              {entry.entry_type}
-            </Text>
+  const renderEntryItem = ({ item }: { item: NotebookEntry }) => (
+    <TouchableOpacity
+      style={[styles.entryCard, { backgroundColor: theme.colors.background }]}
+      onPress={() => {
+        setSelectedEntry(item);
+        setFormData({
+          title: item.title,
+          content: item.content,
+          entry_type: item.entry_type as 'text' | 'voice' | 'mixed',
+          tags: item.tags?.join(', ') || '',
+          project_id: item.project_id,
+          experiment_id: item.experiment_id,
+          voice_transcription: item.voice_transcription,
+        });
+        setIsEditing(true);
+      }}
+    >
+      <View style={styles.entryHeader}>
+        <Text style={[styles.entryTitle, { color: theme.colors.onSurface }]} numberOfLines={1}>
+          {item.title}
+        </Text>
+        <View style={[styles.entryTypeBadge, { backgroundColor: theme.colors.primaryContainer }]}> 
+          <Text style={[styles.entryType, { color: theme.colors.primary }]}> {item.entry_type.toUpperCase()} </Text>
+        </View>
+      </View>
+      <Text style={[styles.entryPreview, { color: theme.colors.onSurfaceVariant }]} numberOfLines={2}>
+        {item.content}
+      </Text>
+      <View style={styles.entryMetaRow}>
+        {item.pendingSync && (
+          <View style={[styles.syncBadge, { borderColor: theme.colors.primaryContainer, backgroundColor: theme.colors.primaryContainer }]}> 
+            <Text style={[styles.syncBadgeText, { color: theme.colors.primary }]}>{'Pending Sync'}</Text>
           </View>
-          <Text style={[styles.entryPreview, { color: theme.colors.onSurfaceVariant }]} numberOfLines={2}>
-            {entry.content}
-          </Text>
-          {entry.tags && entry.tags.length > 0 && (
-            <View style={styles.tagsContainer}>
-              {entry.tags.slice(0, 3).map((tag, index) => (
-                <Text key={index} style={[styles.tag, { color: theme.colors.primary }]}>
-                  #{tag}
-                </Text>
-              ))}
-              {entry.tags.length > 3 && (
-                <Text style={[styles.tag, { color: theme.colors.primary }]}>
-                  +{entry.tags.length - 3}
-                </Text>
-              )}
-            </View>
-          )}
-          <Text style={[styles.entryDate, { color: theme.colors.outline }]}>
-            {new Date(entry.created_at).toLocaleDateString()}
-          </Text>
-        </TouchableOpacity>
-      ))}
-    </ScrollView>
+        )}
+        {item.tags && item.tags.length > 0 && (
+          <View style={styles.tagsContainer}>
+            {item.tags.slice(0, 3).map((tag, index) => (
+              <Text key={index} style={[styles.tag, { color: theme.colors.primary }]}>#{tag}</Text>
+            ))}
+            {item.tags.length > 3 && (
+              <Text style={[styles.tag, { color: theme.colors.primary }]}>+{item.tags.length - 3}</Text>
+            )}
+          </View>
+        )}
+        <Text style={[styles.entryDate, { color: theme.colors.outline }]}> {new Date(item.created_at).toLocaleDateString()} </Text>
+      </View>
+    </TouchableOpacity>
   );
 
   const renderEditor = () => (
-    <ScrollView style={styles.editor}>
-      <TouchableOpacity
-        style={styles.backButton}
-        onPress={() => {
-          setIsEditing(false);
-          setSelectedEntry(null);
-          setFormData({ title: '', content: '', entry_type: 'text', tags: '' });
-        }}
-      >
-        <Ionicons name="arrow-back" size={24} color={theme.colors.primary} />
-        <Text style={[styles.backButtonText, { color: theme.colors.primary }]}>Back to Notebook</Text>
-      </TouchableOpacity>
-
-      <View style={[styles.formContainer, { backgroundColor: theme.colors.surface }]}>
-        <Text style={[styles.formTitle, { color: theme.colors.onSurface }]}>
-          {selectedEntry ? 'Edit Entry' : 'New Entry'}
-        </Text>
-
-        <View style={styles.inputGroup}>
-          <Text style={[styles.label, { color: theme.colors.onSurface }]}>Title</Text>
-          <TextInput
-            style={[styles.input, { backgroundColor: theme.colors.background, color: theme.colors.onSurface }]}
-            value={formData.title}
-            onChangeText={(text) => setFormData({ ...formData, title: text })}
-            placeholder="Entry title"
-            placeholderTextColor={theme.colors.onSurfaceVariant}
-          />
-        </View>
-
-        <View style={styles.inputGroup}>
-          <Text style={[styles.label, { color: theme.colors.onSurface }]}>Type</Text>
-          <View style={styles.typeButtons}>
-            {['text', 'voice', 'mixed'].map((type) => (
-              <TouchableOpacity
-                key={type}
-                style={[
-                  styles.typeButton,
-                  formData.entry_type === type && { backgroundColor: theme.colors.primary },
-                ]}
-                onPress={() => setFormData({ ...formData, entry_type: type as 'text' | 'voice' | 'mixed' })}
-              >
-                <Text
-                  style={[
-                    styles.typeButtonText,
-                    formData.entry_type === type ? { color: 'white' } : { color: theme.colors.onSurface },
-                  ]}
-                >
-                  {type.charAt(0).toUpperCase() + type.slice(1)}
-                </Text>
-              </TouchableOpacity>
-            ))}
+    <ScrollView style={styles.editor} contentContainerStyle={{ paddingBottom: 24 }}>
+      <View style={[styles.editorShell, { backgroundColor: theme.colors.surface }]}> 
+        <View style={styles.editorHeader}>
+          <View style={styles.editorHeaderLeft}>
+            <TouchableOpacity onPress={handleCloseEditor} style={styles.backButton}>
+              <Ionicons name="arrow-back" size={20} color={theme.colors.primary} />
+              <Text style={[styles.backButtonText, { color: theme.colors.primary }]}>Back</Text>
+            </TouchableOpacity>
+            <Text style={[styles.editorTitle, { color: theme.colors.onSurface }]}>Notebook Editor</Text>
           </View>
-        </View>
-
-        <View style={styles.inputGroup}>
-          <Text style={[styles.label, { color: theme.colors.onSurface }]}>Content</Text>
-          <TextInput
-            style={[
-              styles.textArea,
-              { backgroundColor: theme.colors.background, color: theme.colors.onSurface, minHeight: 200 },
-            ]}
-            value={formData.content}
-            onChangeText={(text) => setFormData({ ...formData, content: text })}
-            placeholder="Write your notes here..."
-            placeholderTextColor={theme.colors.onSurfaceVariant}
-            multiline
-            numberOfLines={15}
-            textAlignVertical="top"
-          />
-        </View>
-
-        {formData.entry_type === 'voice' && (
-          <View style={styles.inputGroup}>
-            <Text style={[styles.label, { color: theme.colors.onSurface }]}>Voice Transcription</Text>
-            <TextInput
-              style={[
-                styles.textArea,
-                { backgroundColor: theme.colors.background, color: theme.colors.onSurface },
-              ]}
-              value={formData.voice_transcription || ''}
-              onChangeText={(text) => setFormData({ ...formData, voice_transcription: text })}
-              placeholder="Transcribed voice text will appear here..."
-              placeholderTextColor={theme.colors.onSurfaceVariant}
-              multiline
-              numberOfLines={5}
-              textAlignVertical="top"
-            />
-            <View style={styles.voiceButtons}>
-              <TouchableOpacity
-                style={[styles.voiceButton, isRecording ? styles.recordingButton : { backgroundColor: theme.colors.primary }]}
-                onPress={isRecording ? stopRecording : startRecording}
-              >
-                <Ionicons 
-                  name={isRecording ? "stop" : "mic"} 
-                  size={20} 
-                  color="white" 
-                />
-                <Text style={styles.voiceButtonText}>
-                  {isRecording ? 'Stop Recording' : 'Start Recording'}
-                </Text>
-              </TouchableOpacity>
-              {formData.voice_transcription && (
-                <TouchableOpacity
-                  style={[styles.voiceButton, isSpeaking ? styles.recordingButton : { backgroundColor: theme.colors.secondary }]}
-                  onPress={() => speakText(formData.voice_transcription || '')}
-                >
-                  <Ionicons name={isSpeaking ? "pause" : "volume-high"} size={20} color="white" />
-                  <Text style={styles.voiceButtonText}>
-                    {isSpeaking ? 'Stop Speaking' : 'Read Aloud'}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        )}
-
-        <View style={styles.inputGroup}>
-          <Text style={[styles.label, { color: theme.colors.onSurface }]}>Project (optional)</Text>
-          <TouchableOpacity
-            style={[styles.pickerButton, { backgroundColor: theme.colors.background, borderColor: theme.colors.outline }]}
-            onPress={() => setShowProjectPicker(true)}
-          >
-            <Text style={[styles.pickerButtonText, { color: theme.colors.onSurface }]}>
-              {formData.project_id 
-                ? projects.find(p => p.id === formData.project_id)?.name || 'Select Project'
-                : 'Select Project'}
-            </Text>
-            <Ionicons name="chevron-down" size={20} color={theme.colors.onSurfaceVariant} />
+          <TouchableOpacity style={[styles.primaryAction, { backgroundColor: theme.colors.primary }]} onPress={saveCurrentEntry}>
+            <Ionicons name="save" size={18} color="white" />
+            <Text style={styles.primaryActionText}>Save</Text>
           </TouchableOpacity>
         </View>
 
-        <View style={styles.inputGroup}>
-          <Text style={[styles.label, { color: theme.colors.onSurface }]}>Experiment (optional)</Text>
-          <TouchableOpacity
-            style={[styles.pickerButton, { backgroundColor: theme.colors.background, borderColor: theme.colors.outline }]}
-            onPress={() => setShowExperimentPicker(true)}
-          >
-            <Text style={[styles.pickerButtonText, { color: theme.colors.onSurface }]}>
-              {formData.experiment_id 
-                ? experiments.find(e => e.id === formData.experiment_id)?.title || 'Select Experiment'
-                : 'Select Experiment'}
-            </Text>
-            <Ionicons name="chevron-down" size={20} color={theme.colors.onSurfaceVariant} />
+        <TextInput
+          style={[styles.titleInput, { backgroundColor: theme.colors.background, color: theme.colors.onSurface, borderColor: theme.colors.outline }]}
+          value={formData.title}
+          onChangeText={(text) => setFormData({ ...formData, title: text })}
+          placeholder="Note title..."
+          placeholderTextColor={theme.colors.onSurfaceVariant}
+        />
+
+        <View style={styles.editorToolbar}>
+          <TouchableOpacity style={[styles.toolbarButton, { backgroundColor: theme.colors.background, borderColor: theme.colors.outline }]} onPress={() => setFormData({ ...formData, entry_type: 'text' })}>
+            <Ionicons name="document-text" size={18} color={theme.colors.onSurface} />
+            <Text style={[styles.toolbarButtonText, { color: theme.colors.onSurface }]}>Text</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.toolbarButton, { backgroundColor: theme.colors.background, borderColor: theme.colors.outline }]} onPress={() => setFormData({ ...formData, entry_type: 'voice' })}>
+            <Ionicons name="mic" size={18} color={theme.colors.onSurface} />
+            <Text style={[styles.toolbarButtonText, { color: theme.colors.onSurface }]}>Voice</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.toolbarButton, { backgroundColor: theme.colors.background, borderColor: theme.colors.outline }]} onPress={() => setFormData({ ...formData, entry_type: 'mixed' })}>
+            <Ionicons name="layers" size={18} color={theme.colors.onSurface} />
+            <Text style={[styles.toolbarButtonText, { color: theme.colors.onSurface }]}>Mixed</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.toolbarButton, { backgroundColor: theme.colors.background, borderColor: theme.colors.outline }]} onPress={isRecording ? stopRecording : startRecording}>
+            <Ionicons name={isRecording ? 'stop-circle' : 'mic-circle'} size={18} color={theme.colors.onSurface} />
+            <Text style={[styles.toolbarButtonText, { color: theme.colors.onSurface }]}>{isRecording ? 'Stop' : 'Record'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.toolbarButton, { backgroundColor: theme.colors.background, borderColor: theme.colors.outline }]} onPress={() => speakText(formData.voice_transcription || formData.content)}>
+            <Ionicons name="volume-high" size={18} color={theme.colors.onSurface} />
+            <Text style={[styles.toolbarButtonText, { color: theme.colors.onSurface }]}>Read</Text>
           </TouchableOpacity>
         </View>
 
-        <View style={styles.inputGroup}>
-          <Text style={[styles.label, { color: theme.colors.onSurface }]}>Tags (comma-separated)</Text>
+        <TextInput
+          style={[styles.textArea, { backgroundColor: theme.colors.background, color: theme.colors.onSurface, borderColor: theme.colors.outline }]}
+          value={formData.content}
+          onChangeText={(text) => setFormData({ ...formData, content: text })}
+          placeholder="Start writing your note..."
+          placeholderTextColor={theme.colors.onSurfaceVariant}
+          multiline
+          numberOfLines={15}
+          textAlignVertical="top"
+        />
+
+        <View style={styles.metaRow}>
+          <View style={styles.metaColumn}>
+            <Text style={[styles.metaLabel, { color: theme.colors.onSurface }]}>Project</Text>
+            <Text style={[styles.metaValue, { color: theme.colors.onSurfaceVariant }]}> {formData.project_id ? projects.find((p) => String(p.id) === String(formData.project_id))?.name : 'None'} </Text>
+          </View>
+          <View style={styles.metaColumn}>
+            <Text style={[styles.metaLabel, { color: theme.colors.onSurface }]}>Experiment</Text>
+            <Text style={[styles.metaValue, { color: theme.colors.onSurfaceVariant }]}> {formData.experiment_id ? experiments.find((e) => String(e.id) === String(formData.experiment_id))?.log_title || 'None' : 'None'} </Text>
+          </View>
+        </View>
+
+        <View style={[styles.inputGroup, { marginBottom: 12 }]}> 
+          <Text style={[styles.label, { color: theme.colors.onSurface }]}>Tags</Text>
           <TextInput
-            style={[styles.input, { backgroundColor: theme.colors.background, color: theme.colors.onSurface }]}
+            style={[styles.input, { backgroundColor: theme.colors.background, color: theme.colors.onSurface, borderColor: theme.colors.outline }]}
             value={formData.tags}
             onChangeText={(text) => setFormData({ ...formData, tags: text })}
             placeholder="tag1, tag2, tag3"
@@ -399,203 +351,157 @@ export default function NotebookScreen({ navigation }: any) {
           />
         </View>
 
-        <View style={styles.buttonGroup}>
-          <TouchableOpacity
-            style={[styles.button, styles.saveButton, { backgroundColor: theme.colors.primary }]}
-            onPress={handleSave}
-          >
-            <Ionicons name="checkmark" size={20} color="white" />
-            <Text style={styles.buttonText}>Save</Text>
+        <View style={styles.editorFooter}> 
+          <TouchableOpacity style={[styles.deleteAction, { backgroundColor: theme.colors.error }]} onPress={() => {
+            if (!selectedEntry) return;
+            Alert.alert('Delete Entry', 'Confirm delete this notebook note?', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Delete', style: 'destructive', onPress: () => handleDelete(selectedEntry.id) },
+            ]);
+          }}>
+            <Ionicons name="trash" size={18} color="white" />
+            <Text style={styles.deleteActionText}>Delete</Text>
           </TouchableOpacity>
-
-          {selectedEntry && (
-            <TouchableOpacity
-              style={[styles.button, styles.deleteButton, { backgroundColor: theme.colors.error }]}
-              onPress={() => {
-                Alert.alert('Delete Entry', 'Are you sure you want to delete this entry?', [
-                  { text: 'Cancel', style: 'cancel' },
-                  {
-                    text: 'Delete',
-                    style: 'destructive',
-                    onPress: () => handleDelete(selectedEntry.id),
-                  },
-                ]);
-              }}
-            >
-              <Ionicons name="trash" size={20} color="white" />
-              <Text style={styles.buttonText}>Delete</Text>
-            </TouchableOpacity>
-          )}
+          <View style={styles.chipRow}>
+            {formData.tags.split(',').filter(Boolean).map((tag) => (
+              <View key={tag.trim()} style={[styles.chip, { borderColor: theme.colors.primaryContainer }]}> 
+                <Text style={[styles.chipText, { color: theme.colors.primary }]}>#{tag.trim()}</Text>
+              </View>
+            ))}
+          </View>
         </View>
       </View>
     </ScrollView>
   );
 
-  React.useEffect(() => {
+  const handleCloseEditor = () => {
+    setFormData({ title: '', content: '', entry_type: 'text', tags: '' });
+    setSelectedEntry(null);
+    setIsEditing(false);
+  };
+
+  useEffect(() => {
     loadEntries();
     loadProjectsAndExperiments();
   }, []);
 
-  React.useEffect(() => {
+  useEffect(() => {
     handleSearch();
   }, [searchQuery]);
 
+  const stats = getNotebookStats();
+
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <View style={styles.header}>
-        <View style={styles.headerTitle}>
-          <Text style={styles.headerEmoji}>📓</Text>
-          <View>
-            <Text style={[styles.title, { color: theme.colors.onBackground }]}>Engineering Notebook</Text>
-            <Text style={[styles.subtitle, { color: theme.colors.onSurfaceVariant }]}>
-              Digital Engineering Journal
-            </Text>
-          </View>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}> 
+      <View style={[styles.header, { backgroundColor: theme.colors.surface }]}> 
+        <View style={styles.headerTitle}> 
+          <Ionicons name="book" size={28} color={theme.colors.primary} style={styles.headerIcon} />
+          <Text style={[styles.title, { color: theme.colors.onBackground }]}>Notebook</Text>
         </View>
-        <TouchableOpacity
-          style={[styles.addButton, { backgroundColor: theme.colors.primary }]}
-          onPress={() => setIsEditing(true)}
-        >
+        <TouchableOpacity style={[styles.iconButton, { backgroundColor: theme.colors.primary }]} onPress={() => setIsEditing(true)}>
           <Ionicons name="add" size={20} color="white" />
-          <Text style={styles.addButtonText}>New Entry</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Search Bar */}
-      <View style={[styles.searchBar, { backgroundColor: theme.colors.surface }]}>
-        <Ionicons name="search" size={20} color={theme.colors.onSurfaceVariant} style={styles.searchIcon} />
-        <TextInput
-          style={[styles.searchInput, { color: theme.colors.onSurface }]}
-          placeholder="Search entries..."
-          placeholderTextColor={theme.colors.onSurfaceVariant}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
-        {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={() => { setSearchQuery(''); loadEntries(); }}>
-            <Ionicons name="close-circle" size={20} color={theme.colors.onSurfaceVariant} />
-          </TouchableOpacity>
+      <View style={styles.body}>
+        <View style={[styles.sidebar, { backgroundColor: theme.colors.surface }]}> 
+          <View style={styles.sidebarHeader}> 
+            <Text style={[styles.sidebarTitle, { color: theme.colors.onSurface }]}>Notes</Text>
+            <Text style={[styles.sidebarCount, { color: theme.colors.primary }]}> {entries.length} entries </Text>
+          </View>
+
+          <View style={[styles.searchBar, { backgroundColor: theme.colors.background, borderColor: theme.colors.outline }]}> 
+            <Ionicons name="search" size={18} color={theme.colors.onSurfaceVariant} />
+            <TextInput
+              style={[styles.searchInput, { color: theme.colors.onSurface }]}
+              placeholder="Search notes..."
+              placeholderTextColor={theme.colors.onSurfaceVariant}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => { setSearchQuery(''); loadEntries(); }}>
+                <Ionicons name="close-circle" size={18} color={theme.colors.onSurfaceVariant} />
+              </TouchableOpacity>
+            )}
+          </View>
+
+          <View style={[styles.statsPanel, { backgroundColor: theme.colors.background, borderColor: theme.colors.outline }]}> 
+            <Text style={[styles.statsTitle, { color: theme.colors.onSurface }]}>Notebook Summary</Text>
+            <View style={styles.statsRow}> 
+              <Text style={[styles.statsLabel, { color: theme.colors.onSurfaceVariant }]}>Entries</Text>
+              <Text style={[styles.statsValue, { color: theme.colors.onSurface }]}>{stats.totalEntries}</Text>
+            </View>
+            <View style={styles.statsRow}> 
+              <Text style={[styles.statsLabel, { color: theme.colors.onSurfaceVariant }]}>Text / Voice / Mixed</Text>
+              <Text style={[styles.statsValue, { color: theme.colors.onSurface }]}> {stats.byType.text || 0} / {stats.byType.voice || 0} / {stats.byType.mixed || 0} </Text>
+            </View>
+            <View style={styles.tagPreviewRow}> 
+              {stats.topTags.map(([tag, count]) => (
+                <View key={tag} style={[styles.tagPreview, { borderColor: theme.colors.primaryContainer }]}> 
+                  <Text style={[styles.tagPreviewText, { color: theme.colors.primary }]}>#{tag} � {count}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          <FlatList
+            data={entries}
+            keyExtractor={(item) => item.id.toString()}
+            renderItem={renderEntryItem}
+            contentContainerStyle={styles.entriesList}
+            ListEmptyComponent={
+              <View style={styles.emptyState}>
+                <Text style={[styles.emptyText, { color: theme.colors.onSurfaceVariant }]}>No notebook entries found. Tap New Entry to create one.</Text>
+              </View>
+            }
+          />
+        </View>
+
+        {isEditing ? renderEditor() : (
+          <View style={[styles.previewPane, { backgroundColor: theme.colors.surface }]}> 
+            <Text style={[styles.previewHeading, { color: theme.colors.onSurface }]}>Select a note to edit or create a new entry.</Text>
+            <Text style={[styles.previewDescription, { color: theme.colors.onSurfaceVariant }]}>This workspace mirrors the desktop engineering notebook with a rich editor, toolbar actions, and quick metadata panels.</Text>
+          </View>
         )}
       </View>
 
-      {/* Features Description */}
-      {!isEditing && entries.length === 0 && (
-        <View style={[styles.featuresContainer, { backgroundColor: theme.colors.surface }]}>
-          <Text style={[styles.featuresTitle, { color: theme.colors.onSurface }]}>Features:</Text>
-          <Text style={[styles.featureItem, { color: theme.colors.onSurfaceVariant }]}>• Rich text and markdown support</Text>
-          <Text style={[styles.featureItem, { color: theme.colors.onSurfaceVariant }]}>• Voice transcription integration</Text>
-          <Text style={[styles.featureItem, { color: theme.colors.onSurfaceVariant }]}>• Project and experiment linking</Text>
-          <Text style={[styles.featureItem, { color: theme.colors.onSurfaceVariant }]}>• Tag-based organization</Text>
-          <Text style={[styles.featureItem, { color: theme.colors.onSurfaceVariant }]}>• Search and filtering</Text>
-        </View>
-      )}
-
-      {isEditing ? renderEditor() : renderEntryList()}
-
-      {/* Project Picker Modal */}
-      <Modal
-        visible={showProjectPicker}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowProjectPicker(false)}
-      >
-        <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: theme.colors.onSurface }]}>
-              Select Project
-            </Text>
-            <ScrollView style={styles.pickerList}>
-              <TouchableOpacity
-                style={styles.pickerItem}
-                onPress={() => {
-                  setFormData({ ...formData, project_id: undefined });
-                  setShowProjectPicker(false);
-                }}
-              >
-                <Text style={[styles.pickerItemText, { color: theme.colors.onSurface }]}>
-                  No Project
-                </Text>
+      <Modal visible={showProjectPicker} transparent animationType="slide" onRequestClose={() => setShowProjectPicker(false)}>
+        <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}> 
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface }]}> 
+            <Text style={[styles.modalTitle, { color: theme.colors.onSurface }]}>Select Project</Text>
+            <ScrollView style={styles.pickerList}> 
+              <TouchableOpacity style={styles.pickerItem} onPress={() => { setFormData({ ...formData, project_id: undefined }); setShowProjectPicker(false); }}>
+                <Text style={[styles.pickerItemText, { color: theme.colors.onSurface }]}>No Project</Text>
               </TouchableOpacity>
               {projects.map((project) => (
-                <TouchableOpacity
-                  key={project.id}
-                  style={[
-                    styles.pickerItem,
-                    formData.project_id === project.id && { backgroundColor: theme.colors.primaryContainer }
-                  ]}
-                  onPress={() => {
-                    setFormData({ ...formData, project_id: project.id });
-                    setShowProjectPicker(false);
-                  }}
-                >
-                  <Text style={[
-                    styles.pickerItemText,
-                    formData.project_id === project.id ? { color: theme.colors.primary } : { color: theme.colors.onSurface }
-                  ]}>
-                    {project.name}
-                  </Text>
+                <TouchableOpacity key={project.id} style={[styles.pickerItem, String(formData.project_id) === String(project.id) && { backgroundColor: theme.colors.primaryContainer }]} onPress={() => { setFormData({ ...formData, project_id: project.id }); setShowProjectPicker(false); }}>
+                  <Text style={[styles.pickerItemText, String(formData.project_id) === String(project.id) ? { color: theme.colors.primary } : { color: theme.colors.onSurface }]}>{project.name}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
-            <TouchableOpacity
-              style={[styles.modalButton, { backgroundColor: theme.colors.surfaceVariant }]}
-              onPress={() => setShowProjectPicker(false)}
-            >
+            <TouchableOpacity style={[styles.modalButton, { backgroundColor: theme.colors.surfaceVariant }]} onPress={() => setShowProjectPicker(false)}>
               <Text style={[styles.modalButtonText, { color: theme.colors.onSurface }]}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* Experiment Picker Modal */}
-      <Modal
-        visible={showExperimentPicker}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowExperimentPicker(false)}
-      >
-        <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: theme.colors.onSurface }]}>
-              Select Experiment
-            </Text>
-            <ScrollView style={styles.pickerList}>
-              <TouchableOpacity
-                style={styles.pickerItem}
-                onPress={() => {
-                  setFormData({ ...formData, experiment_id: undefined });
-                  setShowExperimentPicker(false);
-                }}
-              >
-                <Text style={[styles.pickerItemText, { color: theme.colors.onSurface }]}>
-                  No Experiment
-                </Text>
+      <Modal visible={showExperimentPicker} transparent animationType="slide" onRequestClose={() => setShowExperimentPicker(false)}>
+        <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0,0,0,0.5)' }]}> 
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface }]}> 
+            <Text style={[styles.modalTitle, { color: theme.colors.onSurface }]}>Select Experiment</Text>
+            <ScrollView style={styles.pickerList}> 
+              <TouchableOpacity style={styles.pickerItem} onPress={() => { setFormData({ ...formData, experiment_id: undefined }); setShowExperimentPicker(false); }}>
+                <Text style={[styles.pickerItemText, { color: theme.colors.onSurface }]}>No Experiment</Text>
               </TouchableOpacity>
               {experiments.map((experiment) => (
-                <TouchableOpacity
-                  key={experiment.id}
-                  style={[
-                    styles.pickerItem,
-                    formData.experiment_id === experiment.id && { backgroundColor: theme.colors.primaryContainer }
-                  ]}
-                  onPress={() => {
-                    setFormData({ ...formData, experiment_id: experiment.id });
-                    setShowExperimentPicker(false);
-                  }}
-                >
-                  <Text style={[
-                    styles.pickerItemText,
-                    formData.experiment_id === experiment.id ? { color: theme.colors.primary } : { color: theme.colors.onSurface }
-                  ]}>
-                    {experiment.title}
-                  </Text>
+                <TouchableOpacity key={experiment.id} style={[styles.pickerItem, String(formData.experiment_id) === String(experiment.id) && { backgroundColor: theme.colors.primaryContainer }]} onPress={() => { setFormData({ ...formData, experiment_id: experiment.id }); setShowExperimentPicker(false); }}>
+                  <Text style={[styles.pickerItemText, String(formData.experiment_id) === String(experiment.id) ? { color: theme.colors.primary } : { color: theme.colors.onSurface }]}>{experiment.log_title || experiment.id}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
-            <TouchableOpacity
-              style={[styles.modalButton, { backgroundColor: theme.colors.surfaceVariant }]}
-              onPress={() => setShowExperimentPicker(false)}
-            >
+            <TouchableOpacity style={[styles.modalButton, { backgroundColor: theme.colors.surfaceVariant }]} onPress={() => setShowExperimentPicker(false)}>
               <Text style={[styles.modalButtonText, { color: theme.colors.onSurface }]}>Cancel</Text>
             </TouchableOpacity>
           </View>
@@ -610,94 +516,90 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderColor: '#00000010',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 16,
-    paddingTop: 20,
   },
   headerTitle: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
-  headerEmoji: {
-    fontSize: 32,
+  headerIcon: {
+    marginRight: 10,
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  subtitle: {
-    fontSize: 14,
-    marginTop: 2,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    fontSize: 22,
+    fontWeight: '700',
   },
   iconButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 38,
+    height: 38,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
-  },
-  addButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    gap: 8,
+    borderRadius: 12,
   },
   addButtonText: {
     color: 'white',
-    fontWeight: '600',
-    fontSize: 16,
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  body: {
+    flex: 1,
+    flexDirection: 'column',
+  },
+  sidebar: {
+    margin: 16,
+    borderRadius: 16,
+    padding: 16,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+  },
+  sidebarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  sidebarTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  sidebarCount: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginHorizontal: 16,
-    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderRadius: 12,
-  },
-  searchIcon: {
-    marginRight: 8,
+    borderWidth: 1,
+    marginBottom: 16,
+    gap: 8,
   },
   searchInput: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 15,
   },
-  featuresContainer: {
-    marginHorizontal: 16,
+  statsPanel: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
     marginBottom: 16,
-    padding: 16,
-    borderRadius: 12,
-  },
-  featuresTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
-  featureItem: {
-    fontSize: 14,
-    marginBottom: 6,
-  },
-  statsContainer: {
-    marginHorizontal: 16,
-    marginBottom: 12,
-    padding: 16,
-    borderRadius: 12,
   },
   statsTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 12,
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 10,
   },
   statsRow: {
     flexDirection: 'row',
@@ -705,65 +607,265 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   statsLabel: {
-    fontSize: 14,
+    fontSize: 13,
   },
   statsValue: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 13,
+    fontWeight: '700',
   },
-  dateFilterContainer: {
-    marginHorizontal: 16,
-    marginBottom: 12,
-    padding: 16,
-    borderRadius: 12,
-  },
-  dateFilterTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 12,
-  },
-  dateFilterInputs: {
+  tagPreviewRow: {
     flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-  },
-  dateInputWrapper: {
-    flex: 1,
-  },
-  dateInputLabel: {
-    fontSize: 12,
-    marginBottom: 4,
-  },
-  dateInput: {
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 14,
-  },
-  dateFilterActions: {
-    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
-  dateFilterButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
+  tagPreview: {
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
-  dateFilterButtonText: {
-    color: 'white',
+  tagPreviewText: {
+    fontSize: 12,
     fontWeight: '600',
   },
-  pickerButton: {
+  entriesList: {
+    paddingBottom: 8,
+  },
+  entryCard: {
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#00000010',
+  },
+  entryHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 12,
+    marginBottom: 10,
   },
-  pickerButtonText: {
+  entryTitle: {
     fontSize: 16,
+    fontWeight: '700',
+    flex: 1,
+  },
+  entryTypeBadge: {
+    borderRadius: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+  },
+  entryType: {
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  entryPreview: {
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  entryMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  syncBadge: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginRight: 8,
+  },
+  syncBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  entryDate: {
+    fontSize: 12,
+  },
+  tagsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  tag: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginRight: 8,
+  },
+  previewPane: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+    borderRadius: 16,
+    padding: 20,
+    minHeight: 220,
+    justifyContent: 'center',
+  },
+  previewHeading: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginBottom: 10,
+  },
+  previewDescription: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  editor: {
+    marginHorizontal: 16,
+    marginBottom: 16,
+  },
+  editorShell: {
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#00000010',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+  },
+  editorHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  editorHeaderLeft: {
+    flex: 1,
+  },
+  editorTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    marginTop: 10,
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  backButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  primaryAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+  },
+  primaryActionText: {
+    color: 'white',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  titleInput: {
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 16,
+  },
+  editorToolbar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 16,
+  },
+  toolbarButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  toolbarButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  textArea: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    fontSize: 15,
+    lineHeight: 22,
+    minHeight: 220,
+    marginBottom: 16,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    gap: 12,
+  },
+  metaColumn: {
+    flex: 1,
+  },
+  metaLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  metaValue: {
+    fontSize: 14,
+  },
+  inputGroup: {
+    marginBottom: 16,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+  },
+  editorFooter: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
+  deleteAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  deleteActionText: {
+    color: 'white',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    flex: 1,
+  },
+  chip: {
+    borderWidth: 1,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  chipText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   modalOverlay: {
     flex: 1,
@@ -772,14 +874,14 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   modalContent: {
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 20,
     width: '100%',
     maxHeight: '80%',
   },
   modalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
+    fontSize: 18,
+    fontWeight: '700',
     marginBottom: 16,
   },
   pickerList: {
@@ -787,171 +889,27 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   pickerItem: {
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 8,
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 10,
   },
   pickerItemText: {
-    fontSize: 16,
+    fontSize: 15,
   },
   modalButton: {
-    padding: 12,
-    borderRadius: 8,
+    padding: 14,
+    borderRadius: 12,
     alignItems: 'center',
   },
   modalButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '700',
   },
-  voiceButtons: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 8,
-  },
-  voiceButton: {
-    flexDirection: 'row',
+  emptyState: {
+    paddingVertical: 24,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    gap: 8,
   },
-  voiceButtonText: {
-    color: 'white',
-    fontWeight: '600',
+  emptyText: {
     fontSize: 14,
-  },
-  recordingButton: {
-    backgroundColor: '#ef4444',
-  },
-  entriesList: {
-    flex: 1,
-    padding: 16,
-  },
-  entryCard: {
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  entryHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  entryTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    flex: 1,
-  },
-  entryType: {
-    fontSize: 12,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-  },
-  entryPreview: {
-    fontSize: 14,
-    marginBottom: 8,
-  },
-  entryDate: {
-    fontSize: 12,
-  },
-  tagsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginTop: 8,
-    gap: 8,
-  },
-  tag: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  editor: {
-    flex: 1,
-    padding: 16,
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  backButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginLeft: 8,
-  },
-  formContainer: {
-    borderRadius: 12,
-    padding: 20,
-  },
-  formTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 20,
-  },
-  inputGroup: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  input: {
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-  },
-  textArea: {
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    minHeight: 150,
-  },
-  typeButtons: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  typeButton: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    alignItems: 'center',
-  },
-  typeButtonText: {
-    fontWeight: '600',
-  },
-  buttonGroup: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  button: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
-    borderRadius: 12,
-  },
-  saveButton: {
-    flex: 2,
-  },
-  deleteButton: {
-    flex: 1,
-  },
-  buttonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-    marginLeft: 8,
   },
 });
