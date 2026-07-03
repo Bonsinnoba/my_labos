@@ -7,6 +7,23 @@ import { projectsApi, Project } from '../../services/api/projects';
 import { experimentsApi, Experiment } from '../../services/api/experiments';
 import { createNoteWithQueue, updateNoteWithQueue, deleteNoteWithQueue, mergeQueueIntoEntries } from '../../services/offlineQueue';
 
+/** Strip HTML tags and decode common HTML entities for plain-text display. */
+const stripHtml = (html: string | null | undefined): string => {
+  if (!html) return '';
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '') // remove <style> blocks
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '') // remove <script> blocks
+    .replace(/<[^>]+>/g, ' ')                          // strip all remaining tags
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')                              // collapse whitespace
+    .trim();
+};
+
 interface NotebookFormData {
   title: string;
   content: string;
@@ -180,7 +197,7 @@ export default function NotebookScreen({ navigation }: any) {
     const query = searchQuery.toLowerCase();
     const filtered = entries.filter((entry) =>
       entry.title.toLowerCase().includes(query) ||
-      entry.content.toLowerCase().includes(query) ||
+      stripHtml(entry.content).toLowerCase().includes(query) ||
       (entry.tags && entry.tags.some((tag) => tag.toLowerCase().includes(query)))
     );
     setEntries(filtered);
@@ -202,7 +219,7 @@ export default function NotebookScreen({ navigation }: any) {
   const getNotebookStats = () => {
     const totalEntries = entries.length;
     const typeCounts = entries.reduce((acc, entry) => {
-      acc[entry.entry_type] = (acc[entry.entry_type] || 0) + 1;
+      acc[entry.entry_type ?? 'text'] = (acc[entry.entry_type ?? 'text'] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
 
@@ -229,7 +246,7 @@ export default function NotebookScreen({ navigation }: any) {
         setFormData({
           title: item.title,
           content: item.content,
-          entry_type: item.entry_type as 'text' | 'voice' | 'mixed',
+          entry_type: (item.entry_type ?? 'text') as 'text' | 'voice' | 'mixed',
           tags: item.tags?.join(', ') || '',
           project_id: item.project_id,
           experiment_id: item.experiment_id,
@@ -243,11 +260,11 @@ export default function NotebookScreen({ navigation }: any) {
           {item.title}
         </Text>
         <View style={[styles.entryTypeBadge, { backgroundColor: theme.colors.primaryContainer }]}> 
-          <Text style={[styles.entryType, { color: theme.colors.primary }]}> {item.entry_type.toUpperCase()} </Text>
+          <Text style={[styles.entryType, { color: theme.colors.primary }]}> {(item.entry_type ?? 'text').toUpperCase()} </Text>
         </View>
       </View>
       <Text style={[styles.entryPreview, { color: theme.colors.onSurfaceVariant }]} numberOfLines={2}>
-        {item.content}
+        {stripHtml(item.content)}
       </Text>
       <View style={styles.entryMetaRow}>
         {item.pendingSync && (
