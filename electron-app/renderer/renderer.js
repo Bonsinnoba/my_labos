@@ -7,6 +7,8 @@ const syncIndicator = document.getElementById('sync-indicator');
 const syncText = document.getElementById('sync-text');
 const restartButton = document.getElementById('restart-python');
 
+let wasSyncing = false;
+
 // Initialize
 async function init() {
   try {
@@ -45,21 +47,35 @@ async function checkSyncStatus() {
     const response = await fetch('http://localhost:8000/api/sync/status');
     if (response.ok) {
       const data = await response.json();
-      if (data.syncing) {
+      const isSyncing = data.syncing;
+      
+      if (isSyncing) {
         syncIndicator.className = 'sync-indicator syncing';
         syncText.textContent = 'Syncing...';
+        wasSyncing = true;
       } else if (data.last_sync) {
         syncIndicator.className = 'sync-indicator synced';
         const time = new Date(data.last_sync).toLocaleTimeString();
         syncText.textContent = `Last sync: ${time}`;
+        
+        // Refresh iframe if sync just completed
+        if (wasSyncing) {
+          console.log('Sync completed, refreshing iframe');
+          if (appFrame.src) {
+            appFrame.src = appFrame.src;
+          }
+          wasSyncing = false;
+        }
       } else {
         syncIndicator.className = 'sync-indicator';
         syncText.textContent = 'Not synced';
+        wasSyncing = false;
       }
     }
   } catch (error) {
     syncIndicator.className = 'sync-indicator error';
     syncText.textContent = 'Sync error';
+    wasSyncing = false;
   }
 }
 
@@ -78,8 +94,19 @@ document.querySelectorAll('.nav-item').forEach(item => {
     const section = item.dataset.section;
     const url = `http://localhost:8000/${section}`;
     appFrame.src = url;
+    
+    // Reset sync state on navigation
+    wasSyncing = false;
   });
 });
+
+// Function to refresh current iframe content
+function refreshIframe() {
+  if (appFrame.src) {
+    console.log('Refreshing iframe');
+    appFrame.src = appFrame.src;
+  }
+}
 
 // Restart Python backend
 restartButton.addEventListener('click', async () => {

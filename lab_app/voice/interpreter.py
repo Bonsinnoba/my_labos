@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any, Tuple
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.cache_db import CacheDatabase
-from database import queries
+# from database import queries  # Temporarily disabled - queries module not found
 
 
 class VoiceInterpreter:
@@ -78,13 +78,13 @@ class VoiceInterpreter:
             r"what\s+(?:are\s+)?(?:the\s+)?findings\s+(?:for\s+)?(?:project\s+)?(.+)"
         ]
         
-        print("✅ Voice interpreter initialized")
+        print("[OK] Voice interpreter initialized")
     
     def _initialize_database(self) -> None:
         """Initialize database connection."""
         try:
             self.db = CacheDatabase(self.db_path)
-            print("✅ Database connection established")
+            print("[OK] Database connection established")
         except Exception as e:
             print(f"❌ Failed to connect to database: {e}")
             self.db = None
@@ -462,4 +462,4 @@ if __name__ == "__main__":
         print(f"🔊 Response: {response}")
     
     interpreter.close()
-    print("\n✅ Interpreter test complete")
+    print("\n[OK] Interpreter test complete")

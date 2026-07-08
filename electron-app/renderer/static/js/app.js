@@ -188,17 +188,11 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
             case 'toolbox':
                 loadToolbox();
                 break;
-            case 'tracking':
-                loadTrackingData(currentTrackingTab);
+            case 'assets':
+                initAssets();
                 break;
             case 'finance':
                 loadFinanceData('overview');
-                break;
-            case 'components':
-                loadComponents();
-                break;
-            case 'equipment':
-                loadEquipment();
                 break;
             case 'search':
                 loadSearch();
@@ -229,7 +223,7 @@ async function loadDashboard() {
         updateDashboardCard('recent-experiments-list', data.recent_experiments.recent_logs, 'log_title');
         updateDashboardCard('recent-findings-list', data.recent_findings.recent_findings, 'title');
         updateDashboardCard('inventory-alerts-list', data.inventory_alerts.critical_components, 'name');
-        updateDashboardCard('equipment-status-list', data.equipment_status.calibration_due, 'name');
+        // Equipment status card removed - skip update
         
         // AI Insights
         const aiInsights = document.getElementById('ai-insights-list');
@@ -288,8 +282,46 @@ async function refreshDashboardInBackground() {
     }
 }
 
+function refreshCurrentPage() {
+    // Refresh the current page content based on which page is active
+    const activePage = document.querySelector('.page.active');
+    if (!activePage) return;
+    
+    const pageId = activePage.id;
+    
+    switch(pageId) {
+        case 'dashboard-page':
+            loadDashboard();
+            break;
+        case 'resources-page':
+            loadDocuments();
+            break;
+        case 'notebook-page':
+            loadNotebookEntries();
+            break;
+        case 'projects-page':
+            loadProjects();
+            break;
+        case 'experiments-page':
+            loadExperiments();
+            break;
+        case 'findings-page':
+            loadFindings();
+            break;
+        case 'assets-page':
+            loadAssets();
+            break;
+        default:
+            console.log('No refresh handler for page:', pageId);
+    }
+}
+
 function updateDashboardCard(elementId, items, titleField) {
     const element = document.getElementById(elementId);
+    if (!element) {
+        console.warn(`Dashboard element ${elementId} not found, skipping update`);
+        return;
+    }
     if (!items || items.length === 0) {
         element.innerHTML = '<p style="color: var(--text-muted); font-size: 13px;">No data</p>';
     } else {
@@ -483,6 +515,7 @@ async function deleteProject(projectId) {
         if (response.ok) {
             loadProjects();
             refreshDashboardInBackground();
+            refreshCurrentPage();
             showAlert('Project deleted successfully', 'Success');
         } else {
             showAlert('Failed to delete project', 'Error');
@@ -536,6 +569,7 @@ async function deleteExperiment(experimentId, event) {
         if (response.ok) {
             loadExperiments();
             refreshDashboardInBackground();
+            refreshCurrentPage();
             showAlert('Experiment deleted successfully', 'Success');
         } else {
             showAlert('Failed to delete experiment', 'Error');
@@ -1421,6 +1455,7 @@ async function deleteExperimentStage(stageId, experimentId) {
             showAlert('Stage deleted successfully', 'Success');
             loadExperimentStagesList(experimentId);
             loadExperimentTimeline(experimentId, 'experiment-timeline-list');
+            refreshCurrentPage();
         } else {
             showAlert('Failed to delete stage', 'Error');
         }
@@ -1498,6 +1533,7 @@ async function updateStageStatus() {
             statusBadge.textContent = status;
             statusBadge.className = `project-status-badge ${status}`;
             showAlert('Stage status updated successfully', 'Success');
+            refreshCurrentPage();
             // Refresh stage record in current stages list
             if (window.currentExperimentStages) {
                 const stage = window.currentExperimentStages.find(s => s.id === currentStageId);
@@ -1522,6 +1558,7 @@ async function updateStageNotes() {
         });
         if (response.ok) {
             showAlert('Stage notes updated successfully', 'Success');
+            refreshCurrentPage();
             if (window.currentExperimentStages) {
                 const stage = window.currentExperimentStages.find(s => s.id === currentStageId);
                 if (stage) stage.notes = notes;
@@ -1595,6 +1632,26 @@ async function addStageFinding() {
     }
 }
 
+async function deleteUsage(usageId) {
+    if (!(await showConfirm('Delete this usage record?'))) return;
+    
+    try {
+        const response = await apiFetch(`/api/equipment-usage/${usageId}`, { method: 'DELETE' });
+        if (response.ok) {
+            showAlert('Usage record deleted successfully', 'Success');
+            // Refresh the current view
+            if (currentExperimentId) {
+                loadExperimentTimeline(currentExperimentId, 'experiment-timeline-list');
+            }
+        } else {
+            showAlert('Failed to delete usage record', 'Error');
+        }
+    } catch (error) {
+        console.error('Error deleting usage:', error);
+        showAlert('Error deleting usage record', 'Error');
+    }
+}
+
 async function deleteStageFinding(findingId) {
     if (!(await showConfirm('Delete this finding?'))) return;
     try {
@@ -1602,6 +1659,7 @@ async function deleteStageFinding(findingId) {
         if (response.ok) {
             showAlert('Finding deleted successfully', 'Success');
             loadStageFindings(currentStageId);
+            refreshCurrentPage();
         } else {
             showAlert('Failed to delete finding', 'Error');
         }
@@ -1707,6 +1765,7 @@ async function deleteStageDocument(docId) {
             showAlert('Document deleted successfully', 'Success');
             loadStageDocuments(currentStageId);
             refreshDashboardInBackground();
+            refreshCurrentPage();
         } else {
             showAlert('Failed to delete document', 'Error');
         }
@@ -1817,6 +1876,7 @@ async function saveProjectOutcome(projectId) {
         if (response.ok) {
             showAlert('Project outcome saved successfully', 'Success');
             loadProjectOverview(projectId);
+            refreshCurrentPage();
         } else {
             showAlert('Failed to save project outcome', 'Error');
         }
@@ -3358,6 +3418,7 @@ async function createExperimentUnderStage(stageId) {
         if (response.ok) {
             loadProjectTimeline(currentProjectId, 'project-overview-timeline-list');
             loadProjectExperiments(currentProjectId);
+            refreshCurrentPage();
             showAlert('Experiment added under stage', 'Success');
         } else {
             showAlert('Error adding experiment', 'Error');
@@ -3577,8 +3638,8 @@ function renderDocumentPreview(url, fileType, container) {
     
     if (type.includes('image') || type.includes('png') || type.includes('jpg') || type.includes('jpeg') || type.includes('gif') || type.includes('svg') || type.includes('bmp') || type.includes('webp')) {
         container.innerHTML = `<img src="${url}" alt="Document preview" style="max-width: 100%; max-height: 100%; object-fit: contain;">`;
-    } else if (type.includes('pdf')) {
-        container.innerHTML = `<iframe src="${url}" type="application/pdf"></iframe>`;
+    } else if (type.includes('pdf') || type === 'application/pdf') {
+        container.innerHTML = `<iframe src="${url}" type="application/pdf" style="width: 100%; height: 100%; border: none;"></iframe>`;
     } else if (type.includes('video') || type.includes('mp4') || type.includes('webm') || type.includes('mov') || type.includes('avi') || type.includes('mkv')) {
         console.log('Creating video element for type:', fileType);
         console.log('Video URL:', url);
@@ -3676,6 +3737,26 @@ function renderDocumentPreview(url, fileType, container) {
                 console.warn('Video load() threw:', err);
             }
         }
+    } else if (type.includes('text') || type.includes('txt') || type === 'text/plain') {
+        // Text file — fetch and display inline
+        fetch(url)
+            .then(r => r.text())
+            .then(text => {
+                const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                container.innerHTML = `
+                    <div style="width:100%;height:100%;overflow:auto;padding:20px;box-sizing:border-box;">
+                        <pre style="white-space:pre-wrap;word-break:break-word;font-family:'Courier New',monospace;font-size:13px;line-height:1.6;color:var(--text-primary);margin:0;">${escaped}</pre>
+                    </div>
+                `;
+            })
+            .catch(() => {
+                container.innerHTML = `
+                    <div style="text-align: center;">
+                        <p style="color: var(--text-secondary); margin-bottom: 16px;">Could not load text file</p>
+                        <button class="btn btn-primary" onclick="downloadCurrentDocument()">📥 Download File</button>
+                    </div>
+                `;
+            });
     } else {
         console.log('No preview available for type:', type);
         container.innerHTML = `
@@ -4151,6 +4232,11 @@ async function uploadDocument(file) {
         showAlert('Document uploaded successfully', 'Success');
         loadDocuments();
         refreshDashboardInBackground();
+        
+        // Refresh current page content for instant feedback
+        setTimeout(() => {
+            refreshCurrentPage();
+        }, 500);
     } catch (error) {
         console.error('Error uploading document:', error);
         showAlert('Error uploading document', 'Error');
@@ -4246,6 +4332,7 @@ async function deleteDocument(id) {
         if (response.ok) {
             loadDocuments();
             refreshDashboardInBackground();
+            refreshCurrentPage();
         }
     } catch (error) {
         console.error('Error deleting document:', error);
@@ -4460,6 +4547,7 @@ async function saveNotebookEntry() {
                 await loadNoteInEditor(currentNoteId, false);
                 loadNotebook();
                 refreshDashboardInBackground();
+                refreshCurrentPage();
                 if (savedIndicator) {
                     savedIndicator.textContent = 'Saved';
                     savedIndicator.style.color = 'var(--accent-green)';
@@ -4494,6 +4582,7 @@ async function saveNotebookEntry() {
                 document.getElementById('notebook-editor-title').dataset.noteId = data.id;
                 loadNotebook();
                 refreshDashboardInBackground();
+                refreshCurrentPage();
                 if (savedIndicator) {
                     savedIndicator.textContent = 'Note created';
                     savedIndicator.style.color = 'var(--accent-green)';
@@ -5678,21 +5767,79 @@ async function performSearch() {
         const data = await response.json();
         
         const resultsDiv = document.getElementById('search-results');
-        let html = '<h3>Search Results</h3>';
+        let html = `<h3>Search Results for "${query}"</h3>`;
+        html += `<p style="color:var(--text-secondary); font-size:13px; margin-bottom:16px;">Intent: ${data.intent} | Keywords: ${(data.keywords || []).join(', ')}</p>`;
         
+        let totalResults = 0;
         for (const [category, items] of Object.entries(data.results)) {
             if (items && items.length > 0) {
-                html += `<h4>${category.charAt(0).toUpperCase() + category.slice(1)} (${items.length})</h4>`;
+                totalResults += items.length;
+                html += `<div class="search-category">`;
+                html += `<h4 style="color:var(--accent-blue); margin-bottom:8px;">${category.charAt(0).toUpperCase() + category.slice(1)} (${items.length})</h4>`;
+                html += `<div class="search-results-list">`;
+                
                 items.forEach(item => {
                     const title = item.title || item.name || item.log_title || 'Untitled';
-                    html += `<div class="search-result-item">${title}</div>`;
+                    const description = item.description || item.log_text || item.content || '';
+                    const id = item.id;
+                    
+                    html += `<div class="search-result-item" onclick="navigateToSearchResult('${category}', ${id})">`;
+                    html += `<div class="search-result-title">${title}</div>`;
+                    if (description) {
+                        html += `<div class="search-result-description">${description.substring(0, 150)}${description.length > 150 ? '...' : ''}</div>`;
+                    }
+                    html += `</div>`;
                 });
+                
+                html += `</div></div>`;
             }
+        }
+        
+        if (totalResults === 0) {
+            html += `<p style="color:var(--text-muted); padding:20px;">No results found. Try different keywords or a broader search term.</p>`;
         }
         
         resultsDiv.innerHTML = html;
     } catch (error) {
         console.error('Error searching:', error);
+        const resultsDiv = document.getElementById('search-results');
+        resultsDiv.innerHTML = `<p style="color:var(--accent-red);">Error performing search. Please try again.</p>`;
+    }
+}
+
+function navigateToSearchResult(category, id) {
+    switch(category) {
+        case 'projects':
+            loadProjectOverview(id);
+            showPage('projects');
+            break;
+        case 'logs':
+            loadExperimentDetail(id);
+            showPage('experiments');
+            break;
+        case 'findings':
+            showPage('findings');
+            break;
+        case 'components':
+        case 'equipment':
+            showPage('assets');
+            break;
+        case 'documents':
+            showPage('resources');
+            break;
+        case 'notebook':
+            showPage('notebook');
+            break;
+        default:
+            console.log('Unknown category:', category);
+    }
+}
+
+function loadSearch() {
+    // Clear previous search results
+    const resultsDiv = document.getElementById('search-results');
+    if (resultsDiv) {
+        resultsDiv.innerHTML = '';
     }
 }
 
@@ -9833,27 +9980,41 @@ function addAIMessage(message, type) {
     }
 }
 
-// Tracking functionality
-let currentTrackingTab = 'equipment';
+// Assets (formerly Tracking) functionality
+let currentTrackingTab = 'overview';
 
-function initTracking() {
+function initAssets() {
     // Setup tab switching
     document.querySelectorAll('.tracking-tab').forEach(tab => {
         tab.addEventListener('click', () => {
             document.querySelectorAll('.tracking-tab').forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
             currentTrackingTab = tab.dataset.tab;
+            // Show/hide add button based on tab
+            const addBtn = document.getElementById('assets-add-btn');
+            if (addBtn) {
+                addBtn.style.display = currentTrackingTab === 'overview' ? 'none' : '';
+            }
             loadTrackingData(currentTrackingTab);
         });
     });
     
-    // Load initial data
-    loadTrackingData('equipment');
+    // Hide add button on overview tab by default
+    const addBtn = document.getElementById('assets-add-btn');
+    if (addBtn) addBtn.style.display = 'none';
+    
+    // Load initial data (overview)
+    loadTrackingData('overview');
 }
 
 async function loadTrackingData(type) {
     const content = document.getElementById('tracking-content');
     content.innerHTML = '<p>Loading...</p>';
+    
+    if (type === 'overview') {
+        await loadAssetsOverview();
+        return;
+    }
     
     try {
         let endpoint;
@@ -9870,6 +10031,9 @@ async function loadTrackingData(type) {
             case 'components':
                 endpoint = '/api/components';
                 break;
+            default:
+                content.innerHTML = '<p>Unknown asset type</p>';
+                return;
         }
         
         const response = await apiFetch(endpoint);
@@ -9884,6 +10048,73 @@ async function loadTrackingData(type) {
         console.error('Error loading tracking data:', error);
         content.innerHTML = '<p>Error loading data</p>';
     }
+}
+
+async function loadAssetsOverview() {
+    const content = document.getElementById('tracking-content');
+    try {
+        // Fetch counts from all asset endpoints in parallel
+        const [eqRes, toolRes, matRes, compRes] = await Promise.allSettled([
+            apiFetch('/api/equipment').then(r => r.json()),
+            apiFetch('/api/tools').then(r => r.json()),
+            apiFetch('/api/materials').then(r => r.json()),
+            apiFetch('/api/components').then(r => r.json())
+        ]);
+
+        const eq = eqRes.status === 'fulfilled' && eqRes.value.success ? eqRes.value.data : [];
+        const tools = toolRes.status === 'fulfilled' && toolRes.value.success ? toolRes.value.data : [];
+        const mats = matRes.status === 'fulfilled' && matRes.value.success ? matRes.value.data : [];
+        const comps = compRes.status === 'fulfilled' && compRes.value.success ? compRes.value.data : [];
+
+        content.innerHTML = `
+            <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:16px; margin-bottom:24px;">
+                <div class="dashboard-card" style="cursor:pointer;" onclick="switchAssetsTab('equipment')">
+                    <div style="font-size:28px;font-weight:700;color:var(--accent-blue);">${eq.length}</div>
+                    <div style="color:var(--text-secondary);margin-top:4px;">Equipment</div>
+                </div>
+                <div class="dashboard-card" style="cursor:pointer;" onclick="switchAssetsTab('tools')">
+                    <div style="font-size:28px;font-weight:700;color:var(--accent-green);">${tools.length}</div>
+                    <div style="color:var(--text-secondary);margin-top:4px;">Tools</div>
+                </div>
+                <div class="dashboard-card" style="cursor:pointer;" onclick="switchAssetsTab('materials')">
+                    <div style="font-size:28px;font-weight:700;color:var(--accent-orange);">${mats.length}</div>
+                    <div style="color:var(--text-secondary);margin-top:4px;">Materials</div>
+                </div>
+                <div class="dashboard-card" style="cursor:pointer;" onclick="switchAssetsTab('components')">
+                    <div style="font-size:28px;font-weight:700;color:var(--accent-purple, #a78bfa);">${comps.length}</div>
+                    <div style="color:var(--text-secondary);margin-top:4px;">Components</div>
+                </div>
+            </div>
+            <div class="dashboard-card">
+                <h3>Assets at a Glance</h3>
+                <table class="tracking-table" style="margin-top:12px;">
+                    <thead><tr><th>Category</th><th>Total Items</th><th>Available</th><th>In Use / Low Stock</th></tr></thead>
+                    <tbody>
+                        <tr><td>Equipment</td><td>${eq.length}</td><td>${eq.filter(i=>i.status==='available').length}</td><td>${eq.filter(i=>i.status==='in_use').length}</td></tr>
+                        <tr><td>Tools</td><td>${tools.length}</td><td>${tools.filter(i=>i.status==='available').length}</td><td>${tools.filter(i=>i.status==='in_use').length}</td></tr>
+                        <tr><td>Materials</td><td>${mats.length}</td><td>—</td><td>${mats.filter(i=>i.quantity<=i.min_quantity).length} low stock</td></tr>
+                        <tr><td>Components</td><td>${comps.length}</td><td>—</td><td>${comps.filter(i=>i.quantity<=i.min_quantity).length} low stock</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        `;
+    } catch (error) {
+        content.innerHTML = '<p>Error loading assets overview</p>';
+    }
+}
+
+function switchAssetsTab(tabName) {
+    document.querySelectorAll('.tracking-tab').forEach(t => t.classList.remove('active'));
+    const tab = document.querySelector(`.tracking-tab[data-tab="${tabName}"]`);
+    if (tab) tab.classList.add('active');
+    currentTrackingTab = tabName;
+    const addBtn = document.getElementById('assets-add-btn');
+    if (addBtn) addBtn.style.display = '';
+    loadTrackingData(tabName);
+}
+
+function openAddAssetModal() {
+    openAddTrackingModal();
 }
 
 function renderTrackingTable(type, items) {
@@ -9909,6 +10140,9 @@ function renderTrackingTable(type, items) {
         case 'components':
             html += '<th>Name</th><th>Part Number</th><th>Quantity</th><th>Actions</th>';
             break;
+        case 'others':
+            html += '<th>Name</th><th>Category</th><th>Status</th><th>Location</th><th>Actions</th>';
+            break;
     }
     
     html += '</tr></thead><tbody>';
@@ -9929,11 +10163,15 @@ function renderTrackingTable(type, items) {
             case 'components':
                 html += `<td>${item.name}</td><td>${item.part_number || '-'}</td><td>${item.quantity}</td>`;
                 break;
+            case 'others':
+                html += `<td>${item.name}</td><td>${item.category || '-'}</td><td><span class="status-badge ${item.status || 'available'}">${item.status || 'available'}</span></td><td>${item.location || '-'}</td>`;
+                break;
         }
         
         html += `<td class="tracking-actions">
-            <button class="btn btn-primary" onclick="recordUsage('${type}', ${item.id})">Use</button>
-            <button class="btn btn-secondary" onclick="viewUsageHistory('${type}', ${item.id})">History</button>
+            ${type !== 'others' ? `<button class="btn btn-primary" onclick="recordUsage('${type}', ${item.id})">Use</button>` : ''}
+            <button class="btn btn-secondary" onclick="${type !== 'others' ? `viewUsageHistory('${type}', ${item.id})` : `viewAssetOtherDetails(${item.id})`}">${type !== 'others' ? 'History' : 'Details'}</button>
+            <button class="btn btn-secondary" onclick="deleteAsset('${type}', ${item.id})" style="color:var(--accent-red);">Delete</button>
         </td></tr>`;
     });
     
@@ -10102,6 +10340,43 @@ async function viewUsageHistory(type, itemId) {
     }
 }
 
+async function deleteAsset(type, itemId) {
+    const confirmed = await showConfirm('Are you sure you want to delete this asset?', 'Delete Asset');
+    if (!confirmed) return;
+    try {
+        const endpointMap = {
+            equipment: `/api/equipment/${itemId}`,
+            tools: `/api/tools/${itemId}`,
+            materials: `/api/materials/${itemId}`,
+            components: `/api/components/${itemId}`,
+            others: `/api/assets-other/${itemId}`
+        };
+        const response = await apiFetch(endpointMap[type], { method: 'DELETE' });
+        const data = await response.json();
+        if (data.success !== false) {
+            showAlert('Asset deleted successfully.');
+            loadTrackingData(type);
+        } else {
+            showAlert('Error deleting asset.');
+        }
+    } catch (err) {
+        showAlert('Error deleting asset.');
+    }
+}
+
+async function viewAssetOtherDetails(itemId) {
+    try {
+        const response = await apiFetch(`/api/assets-other/${itemId}`);
+        const data = await response.json();
+        if (data.success && data.data) {
+            const item = data.data;
+            showAlert(`Name: ${item.name}\nCategory: ${item.category || '—'}\nStatus: ${item.status || '—'}\nLocation: ${item.location || '—'}\nNotes: ${item.notes || '—'}`, 'Asset Details');
+        }
+    } catch(e) {
+        showAlert('Error loading asset details.');
+    }
+}
+
 function openAddTrackingModal() {
     const type = currentTrackingTab;
     const modal = document.getElementById('add-tracking-modal');
@@ -10245,12 +10520,12 @@ function openAddTrackingModal() {
                     <input type="number" id="component-quantity" name="quantity" min="0" required>
                 </div>
                 <div class="tracking-form-group">
-                    <label for="component-manufacturer">Manufacturer</label>
-                    <input type="text" id="component-manufacturer" name="manufacturer">
+                    <label for="component-supplier">Supplier</label>
+                    <input type="text" id="component-supplier" name="supplier">
                 </div>
                 <div class="tracking-form-group">
-                    <label for="component-location">Location</label>
-                    <input type="text" id="component-location" name="location">
+                    <label for="component-storage-location">Storage Location</label>
+                    <input type="text" id="component-storage-location" name="storage_location">
                 </div>
                 <div class="tracking-form-group">
                     <label for="component-notes">Notes</label>
@@ -10278,17 +10553,31 @@ async function submitTrackingForm() {
     
     // Validate required fields
     const requiredFields = {
-        equipment: ['name', 'status'],
-        tools: ['name', 'tool_type', 'quantity', 'status'],
-        materials: ['name', 'material_type', 'quantity', 'unit'],
-        components: ['name', 'quantity']
-    };
+            equipment: ['name', 'status'],
+            tools: ['name', 'tool_type', 'quantity', 'status'],
+            materials: ['name', 'material_type', 'quantity', 'unit'],
+            components: ['name', 'quantity'],
+            others: ['name']
+        };
     
     for (const field of requiredFields[type] || []) {
         if (!data[field] || data[field].trim() === '') {
             showAlert(`Please fill in all required fields.`, 'Error');
             return;
         }
+    }
+    
+    // Remove empty optional fields to avoid sending empty strings
+    const optionalFields = ['part_number', 'description', 'manufacturer', 'supplier', 'storage_location', 'location', 'notes', 'model', 'calibration_date', 'tool_type', 'material_type', 'unit', 'datasheet', 'supplier_part_number'];
+    for (const field of optionalFields) {
+        if (data[field] === '' || data[field] === undefined) {
+            delete data[field];
+        }
+    }
+    
+    // Convert quantity to number if present
+    if (data.quantity) {
+        data.quantity = parseInt(data.quantity, 10);
     }
     
     try {
@@ -10318,7 +10607,8 @@ async function submitTrackingForm() {
         
         const result = await response.json();
         
-        if (result.success) {
+        // Check if the request was successful (either success field or id field present)
+        if (result.success || result.id) {
             showAlert(`${type.charAt(0).toUpperCase() + type.slice(1)} added successfully!`, 'Success');
             closeAddTrackingModal();
             loadTrackingData(type);
@@ -10334,7 +10624,7 @@ async function submitTrackingForm() {
 // Initialize tracking when page loads — wait for backend to be ready first
 document.addEventListener('DOMContentLoaded', async () => {
     await waitForBackend(20000);
-    initTracking();
+    initAssets();
     initFinance();
 });
 

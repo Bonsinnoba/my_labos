@@ -122,3 +122,22 @@ node_modules/
 *.a
 *.exe
 *.dll
+
+# Local data cache and attachments (for testing)
+local_data_cache/
+knowledge_vault/
+notebook_attachments/
+documents/
+
+# Runtime state files
+.mesh_device_id
+.mesh_supabase_ping_timestamp
+
+# TypeScript check output
+tscheck_output.txt
+
+# Deployment files (needed for production deployment)
+!Dockerfile
+!.dockerignore
+!Procfile
+!instapods_hub.py

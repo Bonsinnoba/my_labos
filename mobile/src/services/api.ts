@@ -166,13 +166,54 @@ export async function deleteNote(id: string) {
 }
 
 // ============================================
-// FILE ACCESS (Signed URLs from Instapods)
+// FILE ACCESS (Download from Instapods Hub)
 // ============================================
 
 /**
- * Get a signed URL for downloading a file from B2
+ * Download a file from Instapods Hub (direct download, no caching on server)
+ * @param filename - The filename in B2 bucket
+ * @param fileSize - Optional file size in bytes to determine storage bucket
+ * @returns File blob
+ */
+export async function downloadFile(filename: string, fileSize?: number): Promise<Blob> {
+  const jwtToken = await getJwtToken()
+  
+  let url = `${INSTAPODS_URL}/download/${encodeURIComponent(filename)}`
+  if (fileSize) {
+    url += `?file_size=${fileSize}`
+  }
+  
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${jwtToken}`,
+    },
+  })
+  
+  if (!response.ok) {
+    throw new Error(`Failed to download file: ${response.statusText}`)
+  }
+  
+  return await response.blob()
+}
+
+/**
+ * Download a file using mobile cache manager
+ * Files are cached locally on the mobile device with 72-hour expiry
+ * @param filename - The filename in B2 bucket
+ * @param fileSize - Optional file size in bytes to determine storage bucket
+ * @returns Local file path or null if download fails
+ */
+export async function downloadFileWithCache(filename: string, fileSize?: number): Promise<string | null> {
+  const { fileCacheManager } = await import('../services/cache/fileCache');
+  return await fileCacheManager.getFile(filename, fileSize);
+}
+
+/**
+ * Get a signed URL for downloading a file from B2 (LEGACY - use downloadFile instead)
  * @param filename - The filename in B2 bucket
  * @returns Signed URL
+ * @deprecated Use downloadFile() instead for cached downloads
  */
 export async function getSignedUrl(filename: string) {
   const jwtToken = await getJwtToken()

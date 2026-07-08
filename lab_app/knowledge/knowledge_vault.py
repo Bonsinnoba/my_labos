@@ -50,7 +50,7 @@ class KnowledgeVault:
         (self.vault_path / "videos").mkdir(exist_ok=True)
         (self.vault_path / "other").mkdir(exist_ok=True)
         
-        print(f"✅ Knowledge Vault initialized at: {self.vault_path.absolute()}")
+        print(f"[OK] Knowledge Vault initialized at: {self.vault_path.absolute()}")
     
     def _get_file_type(self, file_path: str) -> str:
         """
@@ -153,7 +153,8 @@ class KnowledgeVault:
     def add_document(self, source_path: str, title: str, description: Optional[str] = None,
                     tags: Optional[List[str]] = None, project_id: Optional[int] = None,
                     component_id: Optional[int] = None, equipment_id: Optional[int] = None,
-                    experiment_id: Optional[int] = None, stage_id: Optional[int] = None) -> int:
+                    experiment_id: Optional[int] = None, stage_id: Optional[int] = None,
+                    file_type: Optional[str] = None) -> int:
         """
         Add a document to the knowledge vault.
         
@@ -167,6 +168,7 @@ class KnowledgeVault:
             equipment_id: Associated equipment ID
             experiment_id: Associated experiment ID
             stage_id: Associated experiment stage ID
+            file_type: File type (if None, will be auto-detected)
             
         Returns:
             The ID of the inserted document
@@ -174,8 +176,9 @@ class KnowledgeVault:
         if not os.path.exists(source_path):
             raise FileNotFoundError(f"Source file not found: {source_path}")
         
-        # Determine file type
-        file_type = self._get_file_type(source_path)
+        # Determine file type (use provided or auto-detect)
+        if not file_type:
+            file_type = self._get_file_type(source_path)
         
         # Generate unique filename with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -214,7 +217,7 @@ class KnowledgeVault:
             stage_id=stage_id
         )
         
-        print(f"✅ Document added to vault: {title} (ID: {doc_id})")
+        print(f"[OK] Document added to vault: {title} (ID: {doc_id})")
         return doc_id
     
     def get_document(self, doc_id: int) -> Optional[Dict[str, Any]]:
@@ -486,7 +489,7 @@ if __name__ == "__main__":
         
         # Cleanup
         vault.delete_document(doc_id)
-        print("\n✅ Test document deleted")
+        print("\n[OK] Test document deleted")
         
     finally:
         # Cleanup test file
@@ -495,4 +498,4 @@ if __name__ == "__main__":
         
         vault.close()
     
-    print("\n✅ All tests passed")
+    print("\n[OK] All tests passed")

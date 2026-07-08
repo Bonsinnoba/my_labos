@@ -35,7 +35,7 @@ function createWindow() {
 
 function startPythonBackend() {
   const pythonPath = getPythonExecutable();
-  const scriptPath = path.join(__dirname, '..', 'start_web_app.py');
+  const scriptPath = path.join(__dirname, '..', 'lab_app', 'api_server.py');
   
   console.log('Starting Python backend...');
   console.log('Python path:', pythonPath);

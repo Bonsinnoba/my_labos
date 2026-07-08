@@ -48,7 +48,7 @@ class Speaker:
                 else:
                     self.engine.setProperty('voice', voices[0].id)
             
-            print("✅ TTS engine initialized successfully")
+            print("[OK] TTS engine initialized successfully")
             
         except Exception as e:
             print(f"❌ Failed to initialize TTS engine: {e}")
@@ -252,4 +252,4 @@ if __name__ == "__main__":
     time.sleep(0.5)
     speaker.play_chime("wake")
     
-    print("\n✅ Speaker test complete")
+    print("\n[OK] Speaker test complete")

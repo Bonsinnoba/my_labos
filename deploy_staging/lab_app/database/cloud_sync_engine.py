@@ -23,17 +23,7 @@ from io import BytesIO
 from botocore.exceptions import ClientError
 
 # Import secure vault for encryption
-# from .secure_vault import SecureFileVault, InvalidKeyError, CorruptedPayloadError
-
-# Temporary stub for missing secure_vault module
-class SecureFileVault:
-    pass
-
-class InvalidKeyError(Exception):
-    pass
-
-class CorruptedPayloadError(Exception):
-    pass
+from .secure_vault import SecureFileVault, InvalidKeyError, CorruptedPayloadError
 
 # Configuration - Set these environment variables or update directly
 CLOUD_CONFIG = {

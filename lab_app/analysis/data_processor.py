@@ -316,7 +316,7 @@ if __name__ == "__main__":
     
     try:
         df, stats = analyze_file(cloud_url)
-        print(f"\n✅ Analysis complete!")
+        print(f"\n[OK] Analysis complete!")
         print(f"   DataFrame shape: {df.shape}")
         print(f"   Statistics for {len(stats)} columns")
         

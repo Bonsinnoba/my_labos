@@ -34,7 +34,7 @@ class SemanticSearch:
             db: CacheDatabase instance (creates new if None)
         """
         self.db = db if db else CacheDatabase()
-        print("✅ Semantic Search initialized")
+        print("[OK] Semantic Search initialized")
     
     def _extract_keywords(self, query: str) -> List[str]:
         """
@@ -376,4 +376,4 @@ if __name__ == "__main__":
     finally:
         search.close()
     
-    print("\n✅ All tests passed")
+    print("\n[OK] All tests passed")

@@ -74,7 +74,7 @@ class EngineeringToolbox:
         """
         self.db = db if db else CacheDatabase()
         self.active_project_id: Optional[int] = None
-        print("✅ Engineering Toolbox initialized")
+        print("[OK] Engineering Toolbox initialized")
     
     def set_active_project(self, project_id: Optional[int]) -> None:
         """
@@ -110,7 +110,7 @@ class EngineeringToolbox:
             project_id=self.active_project_id
         )
         
-        print(f"✅ Calculation stored: {title} (ID: {calc_id})")
+        print(f"[OK] Calculation stored: {title} (ID: {calc_id})")
         return calc_id
     
     # Electronics Calculators
@@ -1324,4 +1324,4 @@ if __name__ == "__main__":
     finally:
         toolbox.close()
     
-    print("\n✅ All tests passed")
+    print("\n[OK] All tests passed")

@@ -28,7 +28,7 @@ class FindingsManager:
             db: CacheDatabase instance (creates new if None)
         """
         self.db = db if db else CacheDatabase()
-        print("✅ Findings Manager initialized")
+        print("[OK] Findings Manager initialized")
     
     def add_finding(self, title: str, finding_type: str, description: str,
                    root_cause: Optional[str] = None, solution: Optional[str] = None,
@@ -68,7 +68,7 @@ class FindingsManager:
             stage_id=stage_id
         )
         
-        print(f"✅ Finding added: {title} (ID: {finding_id})")
+        print(f"[OK] Finding added: {title} (ID: {finding_id})")
         return finding_id
     
     def get_finding(self, finding_id: int) -> Optional[Dict[str, Any]]:
@@ -339,9 +339,9 @@ if __name__ == "__main__":
         
         # Cleanup
         manager.delete_finding(finding_id)
-        print("\n✅ Test finding deleted")
+        print("\n[OK] Test finding deleted")
         
     finally:
         manager.close()
     
-    print("\n✅ All tests passed")
+    print("\n[OK] All tests passed")

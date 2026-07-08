@@ -40,7 +40,7 @@ class LabDashboard:
         self.equipment_manager = EquipmentManager(db=self.db)
         self.findings_manager = FindingsManager(db=self.db)
         self.relationship_engine = RelationshipEngine(db=self.db)
-        print("✅ Lab Dashboard initialized")
+        print("[OK] Lab Dashboard initialized")
     
     def get_dashboard_data(self) -> Dict[str, Any]:
         """
@@ -308,7 +308,6 @@ class LabDashboard:
             'total_projects': dashboard_data['active_projects']['total_active'],
             'total_experiments': dashboard_data['recent_experiments']['total_recent'],
             'low_stock_alerts': dashboard_data['inventory_alerts']['total_low_stock'],
-            'equipment_count': dashboard_data['equipment_status']['total_equipment'],
             'recent_findings': dashboard_data['recent_findings']['total_recent'],
             'open_issues': dashboard_data['recent_findings']['open_count']
         }
@@ -361,4 +360,4 @@ if __name__ == "__main__":
     finally:
         dashboard.close()
     
-    print("\n✅ All tests passed")
+    print("\n[OK] All tests passed")

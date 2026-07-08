@@ -55,7 +55,7 @@ class SyncEngine:
         self.device_id = device_id or self._generate_device_id()
         self.sync_status = SyncStatus.OFFLINE
         self.conflict_resolution = ConflictResolution.LAST_WRITE_WINS
-        print(f"✅ Sync Engine initialized (Device ID: {self.device_id})")
+        print(f"[OK] Sync Engine initialized (Device ID: {self.device_id})")
     
     def _generate_device_id(self) -> str:
         """Generate a unique device ID."""
@@ -398,4 +398,4 @@ if __name__ == "__main__":
     finally:
         sync.close()
     
-    print("\n✅ All tests passed")
+    print("\n[OK] All tests passed")

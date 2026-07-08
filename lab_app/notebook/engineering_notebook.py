@@ -33,7 +33,7 @@ class EngineeringNotebook:
         self.attachments_path = Path(attachments_path)
         self.attachments_path.mkdir(exist_ok=True)
         
-        print(f"✅ Engineering Notebook initialized at: {self.attachments_path.absolute()}")
+        print(f"[OK] Engineering Notebook initialized at: {self.attachments_path.absolute()}")
     
     def create_entry(self, title: str, content: str, entry_type: str = "text",
                     project_id: Optional[int] = None, experiment_id: Optional[int] = None,
@@ -72,7 +72,7 @@ class EngineeringNotebook:
             voice_transcription=voice_transcription
         )
         
-        print(f"✅ Notebook entry created: {title} (ID: {entry_id})")
+        print(f"[OK] Notebook entry created: {title} (ID: {entry_id})")
         return entry_id
     
     def get_entry(self, entry_id: int) -> Optional[Dict[str, Any]]:
@@ -356,9 +356,9 @@ if __name__ == "__main__":
         
         # Cleanup
         notebook.delete_entry(entry_id)
-        print("\n✅ Test entry deleted")
+        print("\n[OK] Test entry deleted")
         
     finally:
         notebook.close()
     
-    print("\n✅ All tests passed")
+    print("\n[OK] All tests passed")

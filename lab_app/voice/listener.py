@@ -56,7 +56,7 @@ class VoiceListener:
         self.recognizer.phrase_threshold = 0.3
         self.recognizer.non_speaking_duration = 0.5
         
-        print("✅ Voice listener initialized")
+        print("[OK] Voice listener initialized")
     
     def _initialize_microphone(self) -> bool:
         """
@@ -80,7 +80,7 @@ class VoiceListener:
             with self.microphone as source:
                 self.recognizer.adjust_for_ambient_noise(source, duration=1)
             
-            print(f"✅ Microphone initialized (threshold: {self.recognizer.energy_threshold})")
+            print(f"[OK] Microphone initialized (threshold: {self.recognizer.energy_threshold})")
             return True
             
         except Exception as e:
@@ -249,7 +249,7 @@ class VoiceListener:
         )
         self.listening_thread.start()
         
-        print("✅ Voice listener started")
+        print("[OK] Voice listener started")
         return True
     
     def stop(self) -> None:
@@ -268,7 +268,7 @@ class VoiceListener:
         self.speaker.stop()
         self.interpreter.close()
         
-        print("✅ Voice listener stopped")
+        print("[OK] Voice listener stopped")
     
     def is_active(self) -> bool:
         """
@@ -313,4 +313,4 @@ if __name__ == "__main__":
         print("\n\n🛑 Stopping listener...")
         listener.stop()
     
-    print("✅ Test complete")
+    print("[OK] Test complete")

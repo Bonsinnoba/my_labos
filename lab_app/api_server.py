@@ -17,6 +17,9 @@ from pathlib import Path
 import os
 import shutil
 import time
+import threading
+import json
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -129,6 +132,29 @@ gemini_assistant: Optional[GeminiLabAssistant] = None if not GEMINI_AVAILABLE el
 
 
 # --- Pydantic Models for Request/Response Validation ---
+
+
+# --- Background Task: Activity Log Cleanup ---
+
+def cleanup_old_activities():
+    """Background task to clean up activity log entries older than 24 hours."""
+    while True:
+        try:
+            deleted_count = db.delete_old_activities(hours=24)
+            if deleted_count > 0:
+                print(f"[cleanup] Deleted {deleted_count} old activity log entries (older than 24 hours)")
+        except Exception as e:
+            print(f"[cleanup] Error cleaning up old activities: {e}")
+        
+        # Run cleanup every hour
+        time.sleep(3600)
+
+
+# Start background cleanup thread
+cleanup_thread = threading.Thread(target=cleanup_old_activities, daemon=True)
+cleanup_thread.start()
+print("[cleanup] Activity log cleanup thread started (24-hour retention)")
+
 
 class EquipmentCreate(BaseModel):
     name: str
@@ -262,6 +288,22 @@ class MaterialUpdate(BaseModel):
     storage_location: Optional[str] = None
     purchase_date: Optional[str] = None
     supplier: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class OtherCreate(BaseModel):
+    name: str
+    category: str
+    description: Optional[str] = None
+    location: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class OtherUpdate(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -804,11 +846,30 @@ async def add_document_json(payload: DocumentUploadJSON):
         # Decode base64 to bytes
         file_bytes = base64.b64decode(payload.file_data)
         
-        documents_dir = "documents"
-        os.makedirs(documents_dir, exist_ok=True)
+        # Save directly to knowledge_vault directory structure
+        from pathlib import Path
+        # Use absolute path to ensure files are accessible regardless of CWD
+        vault_path = Path(__file__).parent.parent / "knowledge_vault"
+        vault_path.mkdir(exist_ok=True)
+        
+        # Determine subdirectory based on file type
+        file_type_lower = payload.file_type.lower() if payload.file_type else 'other'
+        if file_type_lower == 'pdf':
+            subdir = 'pdfs'
+        elif file_type_lower == 'image':
+            subdir = 'images'
+        elif file_type_lower == 'video':
+            subdir = 'videos'
+        elif file_type_lower == 'text':
+            subdir = 'notes'
+        else:
+            subdir = 'other'
+        
+        target_dir = vault_path / subdir
+        target_dir.mkdir(exist_ok=True)
         
         safe_filename = f"{int(time.time())}_{payload.file_name}"
-        file_path = os.path.join(documents_dir, safe_filename)
+        file_path = target_dir / safe_filename
         
         print(f"[DEBUG] Saving file to: {file_path}, size: {len(file_bytes)} bytes")
         
@@ -822,12 +883,21 @@ async def add_document_json(payload: DocumentUploadJSON):
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Failed to save uploaded file to {file_path}")
         
-        print(f"[DEBUG] File saved successfully, calling knowledge_vault.add_document")
+        print(f"[DEBUG] File saved successfully, storing in database")
         
-        doc_id = knowledge_vault.add_document(
-            source_path=file_path,
+        # Store directly in database (no need to move since it's already in the right place)
+        # Extract metadata
+        file_size = len(file_bytes)
+        metadata = {"file_size": file_size, "original_name": payload.file_name}
+        
+        # Store in database with absolute path
+        doc_id = db.add_document(
             title=payload.title,
+            file_path=str(file_path.absolute()),
+            file_type=payload.file_type,
+            file_size=file_size,
             description=None,
+            metadata=json.dumps(metadata),
             tags=None,
             project_id=payload.project_id,
             component_id=None,
@@ -859,7 +929,7 @@ async def delete_document(doc_id: int):
 
 @app.get("/api/documents/{doc_id}/view")
 async def view_document(doc_id: int):
-    """View/download a document file."""
+    """View/download a document file. Desktop always serves local files."""
     print(f"[DEBUG] view_document called with doc_id={doc_id}")
     try:
         doc = db.get_document(doc_id)
@@ -868,6 +938,7 @@ async def view_document(doc_id: int):
             raise HTTPException(status_code=404, detail="Document not found")
         
         file_path = doc.get('file_path')
+        
         # Convert to absolute path
         abs_file_path = os.path.abspath(file_path) if file_path else None
         
@@ -875,7 +946,7 @@ async def view_document(doc_id: int):
         
         if not abs_file_path or not os.path.exists(abs_file_path):
             print(f"[DEBUG] File not found: {abs_file_path}")
-            raise HTTPException(status_code=404, detail="File not found")
+            raise HTTPException(status_code=404, detail="File not found locally")
         
         # Detect MIME type based on file extension
         import mimetypes
@@ -883,13 +954,14 @@ async def view_document(doc_id: int):
         if not mime_type:
             mime_type = 'application/octet-stream'
         
-        print(f"[DEBUG] Serving file with MIME type: {mime_type}")
+        print(f"[DEBUG] Serving local file with MIME type: {mime_type}")
         
         return FileResponse(
             path=abs_file_path,
             media_type=mime_type,
             filename=os.path.basename(abs_file_path)
         )
+        
     except HTTPException:
         raise
     except (ConnectionResetError, BrokenPipeError) as e:
@@ -1169,9 +1241,55 @@ async def delete_notebook_entry(entry_id: int):
     try:
         success = notebook.delete_entry(entry_id)
         if success:
+            # Log activity
+            db.log_activity('deleted', 'notebook_entry', entry_id, 'Unknown')
             return {"message": "Entry deleted successfully"}
         else:
             raise HTTPException(status_code=404, detail="Entry not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/notebook-attachment/{file_path:path}")
+async def get_notebook_attachment(file_path: str):
+    """Get a notebook attachment file (PDF, txt, etc.)."""
+    try:
+        from pathlib import Path
+        import os
+        
+        # Security: ensure the file path is within the notebook_attachments directory
+        attachments_dir = Path("notebook_attachments")
+        full_path = (attachments_dir / file_path).resolve()
+        
+        # Verify the resolved path is within the attachments directory
+        if not str(full_path).startswith(str(attachments_dir.resolve())):
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        if not full_path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        
+        # Determine content type based on file extension
+        file_ext = full_path.suffix.lower()
+        content_type = "application/octet-stream"
+        
+        if file_ext == '.pdf':
+            content_type = "application/pdf"
+        elif file_ext == '.txt':
+            content_type = "text/plain"
+        elif file_ext in ['.jpg', '.jpeg']:
+            content_type = "image/jpeg"
+        elif file_ext == '.png':
+            content_type = "image/png"
+        elif file_ext == '.gif':
+            content_type = "image/gif"
+        
+        return FileResponse(
+            full_path,
+            media_type=content_type,
+            filename=full_path.name
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2007,6 +2125,70 @@ async def delete_material(material_id: int):
         success = db.delete_material(material_id)
         if not success:
             raise HTTPException(status_code=404, detail="Material not found")
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Others (Inventory Tracker) API ---
+
+@app.get("/api/others")
+async def get_all_others():
+    """Get all other asset entries."""
+    try:
+        others = db.get_all_others()
+        return {"success": True, "data": others}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/others/{other_id}")
+async def get_other(other_id: int):
+    """Get a single other asset entry."""
+    try:
+        other = db.get_other(other_id)
+        if not other:
+            raise HTTPException(status_code=404, detail="Other asset not found")
+        return {"success": True, "data": other}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/others")
+async def create_other(other: OtherCreate):
+    """Create a new other asset entry."""
+    try:
+        other_id = db.add_other(
+            name=other.name,
+            category=other.category,
+            description=other.description,
+            location=other.location,
+            notes=other.notes
+        )
+        return {"success": True, "data": {"id": other_id}}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/others/{other_id}")
+async def update_other(other_id: int, other: OtherUpdate):
+    """Update an other asset entry."""
+    try:
+        success = db.update_other(other_id, **other.dict(exclude_unset=True))
+        if not success:
+            raise HTTPException(status_code=404, detail="Other asset not found")
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/others/{other_id}")
+async def delete_other(other_id: int):
+    """Delete an other asset entry."""
+    try:
+        success = db.delete_other(other_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Other asset not found")
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -3822,13 +4004,6 @@ async def delete_notebook_entry_mobile(entry_id: int):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# --- Static Files Mounting ---
-
-static_dir = Path(__file__).parent / "web" / "static"
-if static_dir.exists():
-    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
 # --- Cleanup on Shutdown ---

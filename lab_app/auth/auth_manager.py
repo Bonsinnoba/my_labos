@@ -36,7 +36,7 @@ class AuthManager:
         self.session_expiry_hours = session_expiry_hours
         self._initialize_database()
         
-        print("✅ Simple AuthManager initialized")
+        print("[OK] Simple AuthManager initialized")
     
     def _initialize_database(self) -> None:
         """Initialize simple authentication tables in the database."""
@@ -81,7 +81,7 @@ class AuthManager:
             conn.commit()
             conn.close()
             
-            print("✅ Simple authentication database initialized")
+            print("[OK] Simple authentication database initialized")
             
         except sqlite3.Error as e:
             print(f"❌ Failed to initialize authentication database: {e}")
@@ -165,7 +165,7 @@ class AuthManager:
             conn.commit()
             conn.close()
             
-            print(f"✅ User registered: {username}")
+            print(f"[OK] User registered: {username}")
             return {"success": True, "message": "User registered successfully"}
             
         except sqlite3.Error as e:
@@ -234,7 +234,7 @@ class AuthManager:
             conn.commit()
             conn.close()
             
-            print(f"✅ User authenticated: {username}")
+            print(f"[OK] User authenticated: {username}")
             
             return {
                 "success": True,
@@ -331,7 +331,7 @@ class AuthManager:
             conn.close()
             
             if rows_affected > 0:
-                print("✅ User logged out successfully")
+                print("[OK] User logged out successfully")
                 return {"success": True, "message": "Logged out successfully"}
             else:
                 return {"success": False, "message": "Session not found"}
@@ -439,7 +439,7 @@ class AuthManager:
             conn.close()
             
             if rows_affected > 0:
-                print(f"✅ Cleaned up {rows_affected} expired sessions")
+                print(f"[OK] Cleaned up {rows_affected} expired sessions")
             
             return rows_affected
             
@@ -494,7 +494,7 @@ class AuthManager:
             conn.commit()
             conn.close()
             
-            print(f"✅ Password changed for user {user_id}")
+            print(f"[OK] Password changed for user {user_id}")
             return {"success": True, "message": "Password changed successfully"}
             
         except sqlite3.Error as e:
@@ -556,4 +556,4 @@ if __name__ == "__main__":
     for user in users:
         print(f"   - {user['username']} ({user['personnel_name']})")
     
-    print("\n✅ All simple authentication tests completed!")
+    print("\n[OK] All simple authentication tests completed!")

@@ -27,7 +27,7 @@ class EquipmentManager:
             db: CacheDatabase instance (creates new if None)
         """
         self.db = db if db else CacheDatabase()
-        print("✅ Equipment Manager initialized")
+        print("[OK] Equipment Manager initialized")
     
     def add_equipment(self, name: str, model: str, status: str = "available",
                      calibration_date: Optional[str] = None) -> int:
@@ -50,7 +50,7 @@ class EquipmentManager:
             calibration_date=calibration_date
         )
         
-        print(f"✅ Equipment added: {name} (ID: {equipment_id})")
+        print(f"[OK] Equipment added: {name} (ID: {equipment_id})")
         return equipment_id
     
     def get_equipment(self, equipment_id: int) -> Optional[Dict[str, Any]]:
@@ -113,7 +113,7 @@ class EquipmentManager:
         if maintenance_type.lower() == "calibration":
             self.db.update_equipment(equipment_id, calibration_date=performed_date)
         
-        print(f"✅ Maintenance record added (ID: {record_id})")
+        print(f"[OK] Maintenance record added (ID: {record_id})")
         return record_id
     
     def get_maintenance_records(self, equipment_id: Optional[int] = None,
@@ -354,9 +354,9 @@ if __name__ == "__main__":
         
         # Cleanup
         manager.delete_equipment(eq_id)
-        print("\n✅ Test equipment deleted")
+        print("\n[OK] Test equipment deleted")
         
     finally:
         manager.close()
     
-    print("\n✅ All tests passed")
+    print("\n[OK] All tests passed")

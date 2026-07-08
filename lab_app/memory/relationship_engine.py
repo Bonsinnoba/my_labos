@@ -30,7 +30,7 @@ class RelationshipEngine:
             db: CacheDatabase instance (creates new if None)
         """
         self.db = db if db else CacheDatabase()
-        print("✅ Relationship Engine initialized")
+        print("[OK] Relationship Engine initialized")
     
     def add_relationship(self, source_type: str, source_id: int, target_type: str,
                         target_id: int, relationship_type: str, confidence: float = 1.0) -> int:
@@ -445,7 +445,7 @@ if __name__ == "__main__":
             confidence=0.9
         )
         
-        print(f"✅ Relationship added (ID: {rel_id})")
+        print(f"[OK] Relationship added (ID: {rel_id})")
         
         # Get relationships
         rels = engine.get_relationships(source_type='project', source_id=1)
@@ -457,9 +457,9 @@ if __name__ == "__main__":
         
         # Cleanup
         engine.delete_relationship('project', 1, 'component', 1, 'uses')
-        print("\n✅ Test relationship deleted")
+        print("\n[OK] Test relationship deleted")
         
     finally:
         engine.close()
     
-    print("\n✅ All tests passed")
+    print("\n[OK] All tests passed")

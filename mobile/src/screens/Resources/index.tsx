@@ -7,6 +7,7 @@ import ResourceCard from '../../components/lists/ResourceCard';
 import { resourcesApi, Resource } from '../../services/api/resources';
 import { CryptoUtils } from '../../services/crypto/cryptoUtils';
 import { useSettingsStore } from '../../store/settingsStore';
+import { downloadFileWithCache } from '../../services/api';
 
 export default function ResourcesScreen({ navigation }: any) {
   const theme = useTheme();
@@ -92,15 +93,40 @@ export default function ResourcesScreen({ navigation }: any) {
         return;
       }
 
-      // For now, just open the URL directly
-      // TODO: Add decryption logic when encrypted files are implemented
+      // Extract filename from URL or path
       const fileUrl = resource.cloud_file_url || resource.file_path;
-      const supported = await Linking.canOpenURL(fileUrl);
+      const filename = fileUrl.split('/').pop() || 'downloaded_file';
 
-      if (supported) {
-        await Linking.openURL(fileUrl);
-      } else {
-        Alert.alert('Error', 'Cannot open this file URL');
+      // Show loading indicator
+      Alert.alert('Downloading', 'Downloading file to device...', [
+        { text: 'OK', onPress: () => {} }
+      ]);
+
+      try {
+        // Download file to mobile cache (72-hour expiry)
+        const localPath = await downloadFileWithCache(filename, resource.size ? parseInt(resource.size) : undefined);
+        
+        if (localPath) {
+          // Open the file from local cache
+          const supported = await Linking.canOpenURL(`file://${localPath}`);
+          if (supported) {
+            await Linking.openURL(`file://${localPath}`);
+          } else {
+            Alert.alert('Error', 'Cannot open this file');
+          }
+        } else {
+          throw new Error('Download failed');
+        }
+      } catch (downloadError) {
+        console.error('Download failed, falling back to direct URL:', downloadError);
+        
+        // Fallback to opening the original URL if download fails
+        const supported = await Linking.canOpenURL(fileUrl);
+        if (supported) {
+          await Linking.openURL(fileUrl);
+        } else {
+          Alert.alert('Error', 'Cannot open this file URL');
+        }
       }
     } catch (error) {
       console.error('Error opening resource:', error);

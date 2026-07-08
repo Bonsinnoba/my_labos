@@ -536,7 +536,7 @@ if __name__ == "__main__":
             dashboard_result = generate_chart(df, 'dashboard', title='Sensor Dashboard')
             print(f"   Dashboard: {'Success' if dashboard_result['success'] else 'Failed'}")
             
-            print("\n✅ All chart tests completed successfully!")
+            print("\n[OK] All chart tests completed successfully!")
             
         except Exception as e:
             print(f"Test failed: {e}")

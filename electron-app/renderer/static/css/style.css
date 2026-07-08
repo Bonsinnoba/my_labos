@@ -4189,6 +4189,81 @@ body.ai-panel-open .documents-grid {
     }
 }
 
+/* Add Tracking Modal - Popup Overlay */
+#add-tracking-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.6);
+    display: none;
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+#add-tracking-modal[style*="block"] {
+    display: flex !important;
+}
+
+#add-tracking-modal .modal-content {
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    width: 100%;
+    max-width: 600px;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+}
+
+#add-tracking-modal .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+#add-tracking-modal .modal-header h3 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+#add-tracking-modal .modal-close {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+#add-tracking-modal .modal-close:hover {
+    background-color: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+#add-tracking-modal .modal-body {
+    padding: 24px;
+}
+
+#add-tracking-modal .modal-footer {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    padding: 20px 24px;
+    border-top: 1px solid var(--border-color);
+}
+
 /* Mobile menu button - hidden on desktop */
 .mobile-menu-btn {
     display: none;
@@ -4197,6 +4272,49 @@ body.ai-panel-open .documents-grid {
 @media (max-width: 768px) {
     .mobile-menu-btn {
         display: flex;
+    }
+
+    #add-tracking-modal {
+        padding: 12px;
+        align-items: flex-end;
+    }
+
+    #add-tracking-modal .modal-content {
+        width: 100%;
+        max-height: 85vh;
+        border-radius: 16px 16px 0 0;
+    }
+
+    #add-tracking-modal .modal-header {
+        padding: 16px 18px;
+    }
+
+    #add-tracking-modal .modal-header h3 {
+        font-size: 16px;
+    }
+
+    #add-tracking-modal .modal-body {
+        padding: 16px 18px;
+        max-height: calc(85vh - 130px);
+    }
+
+    #add-tracking-modal .modal-footer {
+        padding: 14px 18px;
+        flex-direction: column-reverse;
+        gap: 8px;
+    }
+
+    #add-tracking-modal .modal-footer .btn {
+        width: 100%;
+    }
+
+    .tracking-form {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+
+    .tracking-form-full {
+        grid-column: span 1;
     }
 }
 

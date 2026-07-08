@@ -27,7 +27,7 @@ class ComponentManager:
             db: CacheDatabase instance (creates new if None)
         """
         self.db = db if db else CacheDatabase()
-        print("✅ Component Manager initialized")
+        print("[OK] Component Manager initialized")
     
     def add_component(self, name: str, part_number: Optional[str] = None,
                      description: Optional[str] = None, quantity: int = 0,
@@ -65,7 +65,7 @@ class ComponentManager:
             notes=notes
         )
         
-        print(f"✅ Component added: {name} (ID: {component_id})")
+        print(f"[OK] Component added: {name} (ID: {component_id})")
         return component_id
     
     def get_component(self, component_id: int) -> Optional[Dict[str, Any]]:
@@ -334,9 +334,9 @@ if __name__ == "__main__":
         
         # Cleanup
         manager.delete_component(comp_id)
-        print("\n✅ Test component deleted")
+        print("\n[OK] Test component deleted")
         
     finally:
         manager.close()
     
-    print("\n✅ All tests passed")
+    print("\n[OK] All tests passed")

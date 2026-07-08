@@ -66,7 +66,7 @@ class SyncStatusTracker:
         
         self._initialize_database()
         
-        print("✅ SyncStatusTracker initialized")
+        print("[OK] SyncStatusTracker initialized")
     
     def _initialize_database(self) -> None:
         """Initialize sync status tracking tables."""
@@ -114,7 +114,7 @@ class SyncStatusTracker:
             conn.commit()
             conn.close()
             
-            print("✅ Sync status database initialized")
+            print("[OK] Sync status database initialized")
             
         except sqlite3.Error as e:
             print(f"❌ Failed to initialize sync status database: {e}")
@@ -470,7 +470,7 @@ class SyncStatusTracker:
             
             total_deleted = status_deleted + history_deleted + errors_deleted
             if total_deleted > 0:
-                print(f"✅ Cleaned up {total_deleted} old status logs")
+                print(f"[OK] Cleaned up {total_deleted} old status logs")
             
             return total_deleted
             
@@ -548,4 +548,4 @@ if __name__ == "__main__":
     for key, value in status.items():
         print(f"   {key}: {value}")
     
-    print("\n✅ All sync status tests completed!")
+    print("\n[OK] All sync status tests completed!")
