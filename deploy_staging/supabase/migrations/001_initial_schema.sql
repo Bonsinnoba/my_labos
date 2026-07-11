@@ -358,6 +358,8 @@ CREATE TABLE IF NOT EXISTS materials (
     description TEXT,
     quantity REAL DEFAULT 0,
     unit TEXT DEFAULT 'units',
+    unit_mass REAL DEFAULT 0,
+    unit_mass_unit TEXT DEFAULT 'g',
     min_quantity REAL DEFAULT 10,
     storage_location TEXT,
     purchase_date TEXT,

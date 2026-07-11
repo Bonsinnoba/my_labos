@@ -145,6 +145,9 @@ class CacheDatabase:
             # Migration: Add experiment_id and stage_id to knowledge_vault
             self._migrate_knowledge_vault_add_exp_stage(cursor)
 
+            # Migration: Add unit_mass and unit_mass_unit to materials
+            self._migrate_materials_add_unit_mass(cursor)
+
             # Create mesh_transactions table for decentralized sync
             self._create_mesh_transactions_table(cursor)
             
@@ -534,8 +537,9 @@ class CacheDatabase:
                 name TEXT NOT NULL,
                 material_type TEXT,
                 description TEXT,
-                quantity REAL DEFAULT 0,
-                unit TEXT DEFAULT 'units',
+                unit_mass REAL DEFAULT 0,
+                unit_mass_unit TEXT DEFAULT 'g',
+                quantity INTEGER DEFAULT 1,
                 min_quantity REAL DEFAULT 10,
                 storage_location TEXT,
                 purchase_date TEXT,
@@ -1387,6 +1391,17 @@ class CacheDatabase:
             print(f"Error retrieving experiment stages: {e}")
             raise
 
+    def get_experiment_stage(self, stage_id: int) -> Optional[Dict[str, Any]]:
+        try:
+            cursor = self.conn.cursor()
+            query = "SELECT * FROM experiment_stages WHERE id = ? AND is_tombstone = 0"
+            cursor.execute(query, (stage_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as e:
+            print(f"Error retrieving experiment stage: {e}")
+            raise
+
     def get_all_experiment_stages(self, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
         try:
             cursor = self.conn.cursor()
@@ -1424,6 +1439,17 @@ class CacheDatabase:
             return [dict(r) for r in rows]
         except sqlite3.Error as e:
             print(f"Error retrieving project stages: {e}")
+            raise
+
+    def get_project_stage(self, stage_id: int) -> Optional[Dict[str, Any]]:
+        try:
+            cursor = self.conn.cursor()
+            query = "SELECT * FROM project_stages WHERE id = ? AND is_tombstone = 0"
+            cursor.execute(query, (stage_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as e:
+            print(f"Error retrieving project stage: {e}")
             raise
 
     def get_all_project_stages(self, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
@@ -1598,6 +1624,26 @@ class CacheDatabase:
                 print("[db] knowledge_vault already has stage_id column")
         except sqlite3.Error as e:
             print(f"[db] Migration warning (knowledge_vault exp/stage): {e}")
+
+    def _migrate_materials_add_unit_mass(self, cursor: sqlite3.Cursor) -> None:
+        """Add unit_mass and unit_mass_unit to materials if they do not exist."""
+        try:
+            cursor.execute("PRAGMA table_info(materials)")
+            cols = [c[1] for c in cursor.fetchall()]
+            if 'unit_mass' not in cols:
+                print("[db] Migrating materials: adding unit_mass column...")
+                cursor.execute("ALTER TABLE materials ADD COLUMN unit_mass REAL DEFAULT 0")
+                print("[db] Migration complete: unit_mass added to materials")
+            else:
+                print("[db] materials already has unit_mass column")
+            if 'unit_mass_unit' not in cols:
+                print("[db] Migrating materials: adding unit_mass_unit column...")
+                cursor.execute("ALTER TABLE materials ADD COLUMN unit_mass_unit TEXT DEFAULT 'g'")
+                print("[db] Migration complete: unit_mass_unit added to materials")
+            else:
+                print("[db] materials already has unit_mass_unit column")
+        except sqlite3.Error as e:
+            print(f"[db] Migration warning (materials unit_mass): {e}")
 
     # Note: `get_all_experiment_stages` with `limit`/`offset` is defined earlier
     # to support server-side pagination. Do not redefine it here.
@@ -3047,19 +3093,20 @@ class CacheDatabase:
     # Materials CRUD Operations
     
     def add_material(self, name: str, material_type: Optional[str] = None,
-                   description: Optional[str] = None, quantity: float = 0,
-                   unit: str = 'units', min_quantity: float = 10,
+                   description: Optional[str] = None, unit_mass: float = 0,
+                   unit_mass_unit: str = 'g', quantity: int = 1,
+                   min_quantity: float = 10,
                    storage_location: Optional[str] = None, purchase_date: Optional[str] = None,
                    supplier: Optional[str] = None, notes: Optional[str] = None) -> int:
         """Add a material to inventory."""
         try:
             cursor = self.conn.cursor()
             cursor.execute("""
-                INSERT INTO materials (name, material_type, description, quantity, unit,
-                                     min_quantity, storage_location, purchase_date, supplier, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (name, material_type, description, quantity, unit, 
-                  min_quantity, storage_location, purchase_date, supplier, notes))
+                INSERT INTO materials (name, material_type, description, unit_mass, unit_mass_unit,
+                                     quantity, min_quantity, storage_location, purchase_date, supplier, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (name, material_type, description, unit_mass, unit_mass_unit,
+                  quantity, min_quantity, storage_location, purchase_date, supplier, notes))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.Error as e:
@@ -3100,18 +3147,18 @@ class CacheDatabase:
         try:
             if not kwargs:
                 return False
-            
+
             fields = []
             values = []
             for key, value in kwargs.items():
-                if key in ['name', 'material_type', 'description', 'quantity', 'unit',
-                          'min_quantity', 'storage_location', 'purchase_date', 'supplier', 'notes']:
+                if key in ['name', 'material_type', 'description', 'unit_mass', 'unit_mass_unit',
+                          'quantity', 'min_quantity', 'storage_location', 'purchase_date', 'supplier', 'notes']:
                     fields.append(f"{key} = ?")
                     values.append(value)
-            
+
             if not fields:
                 return False
-            
+
             fields.append("last_updated = CURRENT_TIMESTAMP")
             values.append(material_id)
             

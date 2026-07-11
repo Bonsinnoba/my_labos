@@ -227,6 +227,10 @@ class VoiceCommand(BaseModel):
     command: str
 
 
+class TranscribeRequest(BaseModel):
+    audio_base64: str
+
+
 class DataAnalysisRequest(BaseModel):
     file_path: str
     force_download: bool = False
@@ -269,8 +273,9 @@ class MaterialCreate(BaseModel):
     name: str
     material_type: Optional[str] = None
     description: Optional[str] = None
-    quantity: float = 0
-    unit: str = "units"
+    unit_mass: Optional[float] = 0
+    unit_mass_unit: Optional[str] = "g"
+    quantity: int = 1
     min_quantity: float = 10
     storage_location: Optional[str] = None
     purchase_date: Optional[str] = None
@@ -282,8 +287,9 @@ class MaterialUpdate(BaseModel):
     name: Optional[str] = None
     material_type: Optional[str] = None
     description: Optional[str] = None
-    quantity: Optional[float] = None
-    unit: Optional[str] = None
+    unit_mass: Optional[float] = None
+    unit_mass_unit: Optional[str] = None
+    quantity: Optional[int] = None
     min_quantity: Optional[float] = None
     storage_location: Optional[str] = None
     purchase_date: Optional[str] = None
@@ -1353,6 +1359,21 @@ async def get_components(low_stock_only: bool = False):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/components/{component_id}")
+async def get_component(component_id: int):
+    """Get a single component entry."""
+    try:
+        component = component_manager.get_component(component_id)
+        if component:
+            return {"success": True, "data": component}
+        else:
+            raise HTTPException(status_code=404, detail="Component not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/components")
 async def add_component(data: Dict[str, Any]):
     """Add a new component."""
@@ -1627,6 +1648,19 @@ async def list_experiment_stages(experiment_id: Optional[int] = None, limit: int
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/experiment_stages/{stage_id}")
+async def get_experiment_stage(stage_id: int):
+    try:
+        stage = db.get_experiment_stage(stage_id)
+        if not stage:
+            raise HTTPException(status_code=404, detail="Stage not found")
+        return {"success": True, "data": stage}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.put("/api/experiment_stages/{stage_id}")
 async def update_experiment_stage(stage_id: int, data: Dict[str, Any]):
     try:
@@ -1676,6 +1710,19 @@ async def list_project_stages(project_id: Optional[int] = None, limit: int = 200
         else:
             stages = db.get_all_project_stages(limit=limit, offset=offset)
         return {"success": True, "data": stages}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/project_stages/{stage_id}")
+async def get_project_stage(stage_id: int):
+    try:
+        stage = db.get_project_stage(stage_id)
+        if not stage:
+            raise HTTPException(status_code=404, detail="Stage not found")
+        return {"success": True, "data": stage}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2094,12 +2141,13 @@ async def create_material(material: MaterialCreate):
             material_type=material.material_type,
             description=material.description,
             quantity=material.quantity,
-            unit=material.unit,
+            unit_mass_unit=material.unit_mass_unit,
             min_quantity=material.min_quantity,
             storage_location=material.storage_location,
             purchase_date=material.purchase_date,
             supplier=material.supplier,
-            notes=material.notes
+            notes=material.notes,
+            unit_mass=material.unit_mass
         )
         return {"success": True, "data": {"id": material_id}}
     except Exception as e:
@@ -2968,6 +3016,123 @@ async def process_voice_command_api(cmd: VoiceCommand):
         )
         return {"success": True, "response": response}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+vosk_model = None
+
+def get_vosk_model_instance():
+    global vosk_model
+    if vosk_model is not None:
+        return vosk_model
+        
+    import urllib.request
+    import zipfile
+    import shutil
+    
+    # We will save models in a subfolder inside our workspace
+    base_dir = Path(__file__).parent.parent
+    models_dir = base_dir / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    
+    model_name = "vosk-model-small-en-us-0.15"
+    model_path = models_dir / model_name
+    
+    if not model_path.is_dir():
+        zip_path = models_dir / f"{model_name}.zip"
+        url = f"https://alphacephei.com/vosk/models/{model_name}.zip"
+        print(f"[Vosk] Model not found locally. Downloading from {url}...")
+        try:
+            urllib.request.urlretrieve(url, zip_path)
+            print("[Vosk] Download completed. Extracting...")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(models_dir)
+            print("[Vosk] Extraction completed. Cleaning up zip file...")
+            try:
+                os.remove(zip_path)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[Vosk] Error downloading/extracting model: {e}")
+            if zip_path.exists():
+                try:
+                    os.remove(zip_path)
+                except Exception:
+                    pass
+            raise e
+            
+    from vosk import Model
+    print(f"[Vosk] Loading model from {model_path}...")
+    vosk_model = Model(str(model_path))
+    print("[Vosk] Model loaded successfully.")
+    return vosk_model
+
+
+@app.post("/api/voice/transcribe")
+async def transcribe_voice(request: TranscribeRequest):
+    """Transcribe recorded voice from base64 string using Vosk (completely offline)."""
+    import base64
+    import tempfile
+    import json
+    import wave
+    
+    try:
+        # Decode the base64 data
+        audio_data = base64.b64decode(request.audio_base64)
+        
+        # Save to a temporary WAV file
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            tmp_file.write(audio_data)
+            tmp_file_path = tmp_file.name
+            
+        try:
+            # Transcribe the WAV file
+            # Get the lazy-loaded Vosk model
+            model = get_vosk_model_instance()
+            
+            # Read WAV file properties
+            with wave.open(tmp_file_path, "rb") as wf:
+                framerate = wf.getframerate()
+                nchannels = wf.getnchannels()
+                sampwidth = wf.getsampwidth()
+                
+                # Check format compatibility
+                if nchannels != 1 or sampwidth != 2:
+                    print(f"[Vosk] Warning: Audio nchannels={nchannels}, sampwidth={sampwidth}. Expected mono 16-bit PCM.")
+                
+                from vosk import KaldiRecognizer
+                rec = KaldiRecognizer(model, framerate)
+                rec.SetWords(False)
+                
+                text = ""
+                while True:
+                    data = wf.readframes(4000)
+                    if len(data) == 0:
+                        break
+                    if rec.AcceptWaveform(data):
+                        res = json.loads(rec.Result())
+                        if res.get("text"):
+                            text += " " + res["text"]
+                            
+                res = json.loads(rec.FinalResult())
+                if res.get("text"):
+                    text += " " + res["text"]
+                    
+                transcription = text.strip()
+                print(f"[Vosk API] Transcribed: '{transcription}'")
+                return {"success": True, "text": transcription}
+                
+        finally:
+            # Ensure the temp file is cleaned up
+            try:
+                os.unlink(tmp_file_path)
+            except Exception:
+                pass
+                
+    except Exception as e:
+        print(f"[Vosk API] Error transcribing audio: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
