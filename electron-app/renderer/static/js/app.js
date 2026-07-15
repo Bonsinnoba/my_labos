@@ -180,6 +180,8 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
                 loadExperiments();
                 break;
             case 'resources':
+                // Clear project context so Resources shows ALL files, not just the last project's
+                currentProjectId = null;
                 loadDocuments();
                 break;
             case 'findings':
@@ -698,29 +700,41 @@ async function uploadMediaToExperiment(experimentId, type) {
         if (!file) return;
 
         try {
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('title', file.name);
+            showAlert('Uploading media...', 'Info');
+            const fileData = await fileToBase64(file);
 
-            const response = await apiFetch('http://127.0.0.1:8000/api/documents', {
-                method: 'POST',
-                body: formData
-            });
+            const fileType = file.type.startsWith('image/') ? 'image' : (file.type.startsWith('video/') ? 'video' : 'document');
+
+            const formDataFields = {
+                title: file.name,
+                file_type: fileType,
+                file_name: file.name,
+                file_data: fileData
+            };
+
+            if (currentProjectId) {
+                formDataFields.project_id = currentProjectId;
+            }
+            formDataFields.experiment_id = experimentId;
+
+            // Use dedicated IPC upload handler
+            const response = await window.electronAPI.uploadFile(formDataFields);
 
             if (!response.ok) {
                 showAlert('Error uploading file', 'Error');
                 return;
             }
 
-            const data = await response.json();
-            const docId = data.data.id;
-
-            const isImage = file.type.startsWith('image/');
-            const isVideo = file.type.startsWith('video/');
+            const responseData = typeof response.body === 'string' ? JSON.parse(response.body) : response.body;
+            const docId = responseData.id || (responseData.data && responseData.data.id);
+            if (!docId) {
+                showAlert('Error uploading file: invalid response', 'Error');
+                return;
+            }
 
             await addExperimentAttachment(experimentId, type, {
                 id: docId,
-                type: isImage ? 'image' : (isVideo ? 'video' : 'document'),
+                type: fileType,
                 title: file.name
             });
         } catch (error) {
@@ -1580,8 +1594,11 @@ async function loadStageFindings(stageId) {
         const findings = data.findings || [];
 
         const list = document.getElementById('stage-findings-list');
+        if (list) {
+            list.style.padding = '10px';
+        }
         if (findings.length === 0) {
-            list.innerHTML = '<div style="color:var(--text-muted); padding:10px;">No findings recorded for this stage yet</div>';
+            list.innerHTML = '<div style="color:var(--text-muted); padding:10px; text-align:center;">No findings recorded for this stage yet</div>';
             return;
         }
 
@@ -1676,21 +1693,60 @@ async function loadStageDocuments(stageId) {
         const data = await response.json();
         const documents = data.documents || [];
 
-        const list = document.getElementById('stage-documents-list');
+        const container = document.getElementById('stage-documents-list');
+        if (!container) return;
+
+        // Reset any inline overrides we did previously to restore scrollable list layout
+        container.classList.add('content-list');
+        container.style.background = '';
+        container.style.border = '';
+        container.style.borderRadius = '';
+        container.style.overflow = '';
+        container.style.padding = '10px';
+
         if (documents.length === 0) {
-            list.innerHTML = '<div style="color:var(--text-muted); padding:10px;">No documents uploaded for this stage yet</div>';
+            container.innerHTML = '<div style="color:var(--text-muted); padding:10px; text-align:center;">No documents uploaded for this stage yet</div>';
             return;
         }
 
-        list.innerHTML = documents.map(d => `
-            <div class="content-item" style="display:flex; justify-content:space-between; align-items:center; border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; margin-bottom: 8px; background: var(--bg-secondary);">
-                <div style="flex: 1; min-width: 0; margin-right: 12px; text-align: left;">
-                    <a href="http://127.0.0.1:8000/api/documents/${d.id}/view" target="_blank" style="font-weight:600; color:var(--text-primary); text-decoration:none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">📄 ${d.title}</a>
-                    <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">Type: ${d.file_type || 'Unknown'} | Size: ${d.file_size ? (d.file_size / 1024).toFixed(1) + ' KB' : 'Unknown'}</div>
+        container.innerHTML = documents.map(doc => {
+            const fileType = (doc.file_type || '').toLowerCase();
+            const isImage = fileType.includes('image') || ['png','jpg','jpeg','gif','svg','webp','bmp'].some(e => fileType.includes(e));
+            const isVideo = fileType.includes('video') || ['mp4','mov','avi','mkv','webm'].some(e => fileType.includes(e));
+
+            let thumbnailHtml;
+            if (isImage) {
+                thumbnailHtml = `<img src="http://127.0.0.1:8000/api/documents/${doc.id}/view" style="width:100%; height:100%; object-fit:cover;" alt="${escapeHtml(doc.title)}" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><div class="icon" style="display:none; font-size:18px; color:var(--text-secondary);">${getDocumentIcon(doc.file_type)}</div>`;
+            } else if (isVideo) {
+                thumbnailHtml = `<video src="http://127.0.0.1:8000/api/documents/${doc.id}/view" style="width:100%; height:100%; object-fit:cover;" muted preload="metadata"></video>`;
+            } else {
+                thumbnailHtml = `<div class="icon" style="font-size:18px; color:var(--text-secondary);">${getDocumentIcon(doc.file_type)}</div>`;
+            }
+
+            const displayDate = doc.upload_date || doc.created_at || '';
+
+            return `
+                <div class="content-item" onclick="viewDocument(${doc.id})" style="display:flex; align-items:center; gap:12px; border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; margin-bottom: 8px; background: var(--bg-secondary); position:relative; cursor:pointer; text-align:left;">
+                    <!-- Thumbnail/Icon on the left -->
+                    <div style="width:48px; height:48px; border-radius:4px; overflow:hidden; display:flex; align-items:center; justify-content:center; background:var(--bg-tertiary); border:1px solid var(--border-color); flex-shrink:0;">
+                        ${thumbnailHtml}
+                    </div>
+                    <!-- Info in the middle -->
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-weight:600; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:14px;">${escapeHtml(doc.title)}</div>
+                        <div style="font-size:12px; color:var(--text-muted); margin-top:4px;">
+                            ${displayDate ? displayDate.slice(0,10) : ''} • ${(doc.file_type || '').toUpperCase()}
+                        </div>
+                    </div>
+                    <!-- Action button on the right -->
+                    <div onclick="event.stopPropagation()">
+                        <button class="btn btn-sm btn-secondary" onclick="deleteStageDocument(${doc.id})" title="Delete" style="padding:4px 8px; display:flex; align-items:center; justify-content:center;">
+                            🗑️
+                        </button>
+                    </div>
                 </div>
-                <button class="btn btn-sm btn-secondary" onclick="deleteStageDocument(${d.id})">🗑️</button>
-            </div>
-        `).join('');
+            `;
+        }).join('');
     } catch (error) {
         console.error('Error loading stage documents:', error);
     }
@@ -1729,25 +1785,39 @@ async function handleStageFileUpload(event) {
     }
 
     try {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('title', title);
-        formData.append('file_type', file_type);
-        if (currentProjectId) formData.append('project_id', currentProjectId);
-        if (currentExperimentId) formData.append('experiment_id', currentExperimentId);
-        formData.append('stage_id', currentStageId);
-
         showAlert('Uploading stage document...', 'Info');
 
-        console.log('[DEBUG] Starting stage upload via apiFetch to /api/documents');
+        console.log('[DEBUG] Starting stage upload via electronAPI.uploadFile');
         console.log('[DEBUG] File:', file.name, 'Size:', file.size);
 
-        const response = await apiFetch('/api/documents', {
-            method: 'POST',
-            body: formData
-        });
+        // Convert file to base64 for IPC transfer
+        const fileData = await fileToBase64(file);
 
-        const data = await response.json();
+        // Prepare fields
+        const formDataFields = {
+            title: title,
+            file_type: file_type,
+            file_name: file.name,
+            file_data: fileData,
+            stage_id: currentStageId
+        };
+
+        if (currentProjectId) {
+            formDataFields.project_id = currentProjectId;
+        }
+        if (currentExperimentId) {
+            formDataFields.experiment_id = currentExperimentId;
+        }
+
+        // Use dedicated IPC upload handler
+        const response = await window.electronAPI.uploadFile(formDataFields);
+
+        // IPC returns a plain object {ok, status, body}, NOT a Response object
+        if (!response.ok) {
+            const errBody = typeof response.body === 'string' ? JSON.parse(response.body) : response.body;
+            throw new Error(errBody?.detail || 'Upload failed');
+        }
+
         showAlert('Stage document uploaded successfully', 'Success');
         loadStageDocuments(currentStageId);
         refreshDashboardInBackground();
@@ -1765,9 +1835,11 @@ async function deleteStageDocument(docId) {
         const response = await apiFetch(`/api/documents/${docId}`, { method: 'DELETE' });
         if (response.ok) {
             showAlert('Document deleted successfully', 'Success');
+            // Refresh stage-level view
             loadStageDocuments(currentStageId);
+            // Also refresh global Resources so deletion is visible there immediately
+            loadDocuments();
             refreshDashboardInBackground();
-            refreshCurrentPage();
         } else {
             showAlert('Failed to delete document', 'Error');
         }
@@ -1790,16 +1862,23 @@ document.addEventListener('DOMContentLoaded', () => {
             document.querySelectorAll('#experiment-workspace-page .tab-pane').forEach(p => p.classList.remove('active'));
             tab.classList.add('active');
             document.getElementById(`tab-${tabName}`).classList.add('active');
+            
+            // Reload data when switching tabs
+            if (tabName === 'stages' && currentExperimentId) {
+                loadExperimentStagesList(currentExperimentId);
+            }
+            if (tabName === 'usage' && currentExperimentId) {
+                loadExperimentUsageList(currentExperimentId);
+            }
         });
     });
 });
 
 async function loadProjectData(projectId) {
     // Load project-specific data for each tab
-    loadProjectNotebook(projectId);
+    loadProjectStages(projectId);
     loadProjectExperiments(projectId);
-    loadProjectCalculations(projectId);
-    loadProjectComponents(projectId);
+    loadProjectAssetsUsed(projectId);
     loadProjectDocuments(projectId);
     loadProjectFindings(projectId);
     // Note: loadProjectOverview will also load the timeline into the overview
@@ -1928,29 +2007,6 @@ async function loadProjectUsageSummary(projectId) {
     }
 }
 
-async function loadProjectNotebook(projectId) {
-    try {
-        const response = await apiFetch(`/api/notebook?project_id=${projectId}`);
-        const data = await response.json();
-
-        const list = document.getElementById('project-notebook-list');
-        if (data.entries.length === 0) {
-            list.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-muted);">No entries yet</div>';
-        } else {
-            list.innerHTML = data.entries.map(entry => `
-                    <div class="content-item" onclick="loadNoteInEditor(${entry.id})" style="cursor: pointer;">
-                        <div>
-                            <div class="title">${entry.title}</div>
-                            <div class="description">${entry.content.substring(0, 100)}...</div>
-                        </div>
-                    </div>
-                `).join('');
-        }
-    } catch (error) {
-        console.error('Error loading project notebook:', error);
-    }
-}
-
 async function loadProjectExperiments(projectId) {
     try {
         const response = await apiFetch(`/api/logs?project_id=${projectId}`);
@@ -1983,49 +2039,181 @@ async function loadProjectExperiments(projectId) {
     }
 }
 
-async function loadProjectCalculations(projectId) {
+async function loadProjectStages(projectId) {
     try {
-        const response = await apiFetch(`/api/calculations?project_id=${projectId}`);
-        const data = await response.json();
-
-        const list = document.getElementById('project-calculations-list');
-        if (!data.calculations || data.calculations.length === 0) {
-            list.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-muted);">No calculations yet</div>';
+        // Fetch both project stages and all experiments to get their stages
+        const [projStResp, expResp] = await Promise.all([
+            apiFetch(`/api/project_stages?project_id=${projectId}&limit=200`),
+            apiFetch(`/api/logs?project_id=${projectId}&limit=200`)
+        ]);
+        
+        const projStData = await projStResp.json();
+        const expData = await expResp.json();
+        
+        const projectStages = (projStData && projStData.data) ? projStData.data : [];
+        const experiments = (expData && expData.data) ? expData.data : [];
+        
+        const list = document.getElementById('project-stages-list');
+        
+        // Fetch experiment stages for all experiments
+        let allStages = [];
+        
+        // Add project stages
+        projectStages.forEach(stage => {
+            allStages.push({
+                ...stage,
+                stage_type: 'project',
+                parent_name: 'Project'
+            });
+        });
+        
+        // Add experiment stages
+        for (const exp of experiments) {
+            try {
+                const expStResp = await apiFetch(`/api/experiment_stages?experiment_id=${exp.id}&limit=200`);
+                const expStData = await expStResp.json();
+                const expStages = (expStData && expStData.data) ? expStData.data : [];
+                expStages.forEach(stage => {
+                    allStages.push({
+                        ...stage,
+                        stage_type: 'experiment',
+                        parent_name: exp.log_title || `Experiment ${exp.id}`,
+                        experiment_id: exp.id
+                    });
+                });
+            } catch (e) {
+                // Continue if one experiment fails
+            }
+        }
+        
+        if (!allStages || allStages.length === 0) {
+            list.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-muted);">No stages yet</div>';
         } else {
-            list.innerHTML = data.calculations.map(calc => `
+            list.innerHTML = allStages.map(stage => `
                 <div class="content-item">
                     <div>
-                        <div class="title">${calc.title}</div>
-                        <div class="description">${calc.calculation_type}</div>
+                        <div class="title">${stage.stage_name || stage.name || 'Stage'}</div>
+                        <div class="description">Status: ${stage.status || 'Not started'}</div>
+                        <div class="details">${stage.stage_type === 'experiment' ? `Experiment: ${stage.parent_name}` : 'Project Stage'}</div>
+                        ${stage.notes ? `<div class="details">${stage.notes}</div>` : ''}
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        ${stage.stage_type === 'project' ? `
+                            <button class="btn btn-sm btn-secondary" onclick="editProjectStage(${stage.id}, ${projectId})">✏️ Edit</button>
+                            <button class="btn btn-sm btn-secondary" onclick="deleteProjectStage(${stage.id}, ${projectId})">🗑️</button>
+                        ` : `
+                            <button class="btn btn-sm btn-secondary" onclick="deleteExperimentStage(${stage.id}, ${stage.experiment_id})">🗑️</button>
+                        `}
                     </div>
                 </div>
             `).join('');
         }
     } catch (error) {
-        console.error('Error loading project calculations:', error);
+        console.error('Error loading project stages:', error);
     }
 }
 
-async function loadProjectComponents(projectId) {
-    try {
-        const response = await apiFetch(`/api/components`);
-        const data = await response.json();
+async function editProjectStage(stageId, projectId) {
+    // Set currentProjectId to ensure showTimelineEventDetails identifies this as a project stage
+    currentProjectId = projectId;
+    showTimelineEventDetails('stage', stageId, null);
+}
 
-        const list = document.getElementById('project-components-list');
-        if (data.components.length === 0) {
-            list.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-muted);">No components yet</div>';
+async function deleteProjectStage(stageId, projectId) {
+    if (!(await showConfirm('Delete this stage?'))) return;
+
+    try {
+        const response = await apiFetch(`/api/project_stages/${stageId}`, { method: 'DELETE' });
+        if (response.ok) {
+            showAlert('Stage deleted successfully', 'Success');
+            loadProjectStages(projectId);
+            loadProjectOverview(projectId);
         } else {
-            list.innerHTML = data.components.map(comp => `
-                <div class="content-item">
-                    <div>
-                        <div class="title">${comp.name}</div>
-                        <div class="description">Qty: ${comp.quantity}</div>
-                    </div>
-                </div>
-            `).join('');
+            showAlert('Failed to delete stage', 'Error');
         }
     } catch (error) {
-        console.error('Error loading project components:', error);
+        console.error('Error deleting stage:', error);
+        showAlert('Error deleting stage', 'Error');
+    }
+}
+
+async function loadProjectAssetsUsed(projectId) {
+    try {
+        // Fetch stages and usage logs to group assets by stage
+        const [stResp, usageResp] = await Promise.all([
+            apiFetch(`/api/project_stages?project_id=${projectId}&limit=200`),
+            apiFetch(`/api/usage?project_id=${projectId}&limit=200`)
+        ]);
+        
+        const stData = await stResp.json();
+        const usageData = await usageResp.json();
+        
+        const stages = (stData && stData.data) ? stData.data : [];
+        const usageLogs = (usageData && usageData.data) ? usageData.data : [];
+        
+        // Create stage map for names
+        const stageMap = {};
+        stages.forEach(s => { stageMap[String(s.id)] = s.stage_name || s.name || 'Stage'; });
+        
+        // Group usage by stage_id
+        const usageByStage = {};
+        usageLogs.forEach(u => {
+            const stageId = u.stage_id ? String(u.stage_id) : 'unassigned';
+            if (!usageByStage[stageId]) {
+                usageByStage[stageId] = [];
+            }
+            usageByStage[stageId].push(u);
+        });
+        
+        const list = document.getElementById('project-assets-used-list');
+        
+        if (usageLogs.length === 0) {
+            list.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-muted);">No assets used yet</div>';
+        } else {
+            // Build HTML grouped by stage
+            let html = '';
+            
+            // First show unassigned usage
+            if (usageByStage['unassigned'] && usageByStage['unassigned'].length > 0) {
+                html += `<div style="margin-bottom: 20px;">
+                    <h4 style="color: var(--text-secondary); margin-bottom: 8px; font-size: 14px;">Unassigned</h4>
+                    ${usageByStage['unassigned'].map(u => `
+                        <div class="content-item">
+                            <div>
+                                <div class="title">${u.entity_type || 'Item'} ${u.entity_id || ''}</div>
+                                <div class="description">Qty: ${u.quantity_used || ''} ${u.unit || ''} — ${u.post_use_status || ''}</div>
+                                <div class="details">${u.notes || ''}</div>
+                            </div>
+                            <div style="color: var(--text-muted); font-size: 12px;">${u.timestamp || ''}</div>
+                        </div>
+                    `).join('')}
+                </div>`;
+            }
+            
+            // Show usage grouped by stage
+            stages.forEach(stage => {
+                const stageId = String(stage.id);
+                if (usageByStage[stageId] && usageByStage[stageId].length > 0) {
+                    html += `<div style="margin-bottom: 20px;">
+                        <h4 style="color: var(--accent-orange); margin-bottom: 8px; font-size: 14px; font-weight: 600;">${stageMap[stageId]}</h4>
+                        ${usageByStage[stageId].map(u => `
+                            <div class="content-item">
+                                <div>
+                                    <div class="title">${u.entity_type || 'Item'} ${u.entity_id || ''}</div>
+                                    <div class="description">Qty: ${u.quantity_used || ''} ${u.unit || ''} — ${u.post_use_status || ''}</div>
+                                    <div class="details">${u.notes || ''}</div>
+                                </div>
+                                <div style="color: var(--text-muted); font-size: 12px;">${u.timestamp || ''}</div>
+                            </div>
+                        `).join('')}
+                    </div>`;
+                }
+            });
+            
+            list.innerHTML = html;
+        }
+    } catch (error) {
+        console.error('Error loading project assets used:', error);
     }
 }
 
@@ -2033,24 +2221,66 @@ async function loadProjectDocuments(projectId) {
     try {
         const response = await apiFetch(`/api/documents?project_id=${projectId}`);
         const data = await response.json();
+        const documents = data.documents || [];
 
-        const list = document.getElementById('project-documents-list');
-        if (data.documents.length === 0) {
-            list.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-muted);">No documents yet</div>';
-        } else {
-            list.innerHTML = data.documents.map(doc => `
-                <div class="content-item" onclick="viewDocument(${doc.id})" style="cursor: pointer;">
-                    <div>
-                        <div class="title">${doc.title}</div>
-                        <div class="description">${doc.description || 'No description'}</div>
-                    </div>
-                </div>
-            `).join('');
+        const container = document.getElementById('project-documents-list');
+        if (!container) return;
+
+        // Replace the plain content-list container with an inline grid
+        container.classList.remove('content-list');
+        container.style.background = 'none';
+        container.style.border = 'none';
+        container.style.borderRadius = '0';
+        container.style.overflow = 'visible';
+
+        if (documents.length === 0) {
+            container.innerHTML = '<div style="padding: 40px; text-align: center; color: var(--text-muted);">No documents uploaded yet</div>';
+            return;
         }
+
+        container.innerHTML = `
+            <div class="documents-grid" style="margin-top: 4px;">
+                ${documents.map(doc => {
+                    const fileType = (doc.file_type || '').toLowerCase();
+                    const isImage = fileType.includes('image') || ['png','jpg','jpeg','gif','svg','webp','bmp'].some(e => fileType.includes(e));
+                    const isVideo = fileType.includes('video') || ['mp4','mov','avi','mkv','webm'].some(e => fileType.includes(e));
+
+                    let thumbnailHtml;
+                    if (isImage) {
+                        thumbnailHtml = `<img src="http://127.0.0.1:8000/api/documents/${doc.id}/view" class="document-thumbnail" alt="${escapeHtml(doc.title)}" onerror="this.style.display='none';this.nextElementSibling.style.display='block'"><div class="icon" style="display:none">${getDocumentIcon(doc.file_type)}</div>`;
+                    } else if (isVideo) {
+                        thumbnailHtml = `<video src="http://127.0.0.1:8000/api/documents/${doc.id}/view" class="document-thumbnail" muted preload="metadata"></video>`;
+                    } else {
+                        thumbnailHtml = `<div class="icon">${getDocumentIcon(doc.file_type)}</div>`;
+                    }
+
+                    const displayDate = doc.upload_date || doc.created_at || '';
+
+                    return `
+                        <div class="document-card" onclick="viewDocument(${doc.id})" style="cursor:pointer; position:relative;">
+                            ${thumbnailHtml}
+                            <div class="title">${escapeHtml(doc.title)}</div>
+                            <div class="meta">${displayDate ? displayDate.slice(0,10) : ''}</div>
+                            <div class="document-actions" onclick="event.stopPropagation()">
+                                <button class="document-action-btn delete-btn" onclick="deleteDocument(${doc.id})" title="Delete">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <polyline points="3 6 5 6 21 6"></polyline>
+                                        <path d="M19 6l-1 14H6L5 6"></path>
+                                        <path d="M10 11v6M14 11v6"></path>
+                                        <path d="M9 6V4h6v2"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        `;
     } catch (error) {
         console.error('Error loading project documents:', error);
     }
 }
+
 
 async function loadProjectFindings(projectId) {
     try {
@@ -2254,7 +2484,7 @@ async function loadProjectTimeline(projectId, containerId = 'project-overview-ti
                 `).join('');
 
                 return `
-                    <div class="timeline-item" onclick="showTimelineEventDetails('stage', ${ev.id}, null); updateLabAssistantContext('stage', ${ev.id}, ${JSON.stringify(ev).replace(/"/g, '&quot;')})">
+                    <div class="timeline-item">
                         <div class="timeline-dot stage-dot"></div>
                         <div class="timeline-content ${activeClass}">
                             <div style="font-weight:600">${escapeHtml(ev.title)} ${ev.subtitle ? `— ${escapeHtml(ev.subtitle)}` : ''}</div>
@@ -2751,9 +2981,15 @@ async function submitUsage(payload, silent = false) {
         if (resp.ok) {
             if (!silent) {
                 showAlert('Usage logged', 'Success');
-                if (currentProjectId) loadProjectUsage(currentProjectId);
-                if (document.getElementById('project-components-list')) loadProjectComponents(currentProjectId);
+            }
+            // Always refresh based on context, even in silent mode
+            if (currentProjectId) {
+                loadProjectUsage(currentProjectId);
+                if (document.getElementById('project-assets-used-list')) loadProjectAssetsUsed(currentProjectId);
                 if (document.getElementById('project-documents-list')) loadProjectDocuments(currentProjectId);
+            }
+            if (payload.experiment_id) {
+                loadExperimentOverview(payload.experiment_id);
             }
             return true;
         }
@@ -3166,11 +3402,62 @@ async function showTimelineEventDetails(type, id, experimentId) {
         if (type === 'stage') {
             // Fetch related notebook entries and documents for linking
             let notebookOptions = [];
+            let stageUsageHtml = '';
+            
             try {
-                const nbResp = await apiFetch(`/api/notebook?experiment_id=${experimentId}`);
-                const nbData = await nbResp.json();
-                const entries = nbData.entries || [];
-                notebookOptions = entries.map(e => ({ value: e.id, label: e.title }));
+                let nbUrl;
+                if (isProjectStage) {
+                    // For project stages, fetch experiments under this stage and aggregate their notebook entries
+                    const expResp = await apiFetch(`/api/logs?project_id=${currentProjectId}&limit=200`);
+                    const expData = await expResp.json();
+                    const experiments = (expData && expData.data) ? expData.data : [];
+                    const experimentsInStage = experiments.filter(e => e.stage_id === id);
+                    
+                    // Fetch notebook entries for each experiment in this stage
+                    const allEntries = [];
+                    for (const exp of experimentsInStage) {
+                        try {
+                            const nbResp = await apiFetch(`/api/notebook?experiment_id=${exp.id}`);
+                            const nbData = await nbResp.json();
+                            const entries = nbData.entries || [];
+                            allEntries.push(...entries);
+                        } catch (e) {
+                            // Continue if one experiment fails
+                        }
+                    }
+                    notebookOptions = allEntries.map(e => ({ value: e.id, label: e.title }));
+                    
+                    // Fetch usage logs for all experiments in this stage
+                    const allUsage = [];
+                    for (const exp of experimentsInStage) {
+                        try {
+                            const usageResp = await apiFetch(`/api/usage?experiment_id=${exp.id}&limit=200`);
+                            const usageData = await usageResp.json();
+                            const usageLogs = usageData.data || [];
+                            allUsage.push(...usageLogs);
+                        } catch (e) {
+                            // Continue if one experiment fails
+                        }
+                    }
+                    
+                    if (allUsage.length > 0) {
+                        stageUsageHtml = `<div style="margin-top: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 8px;">
+                            <h4 style="margin: 0 0 8px 0; font-size: 14px; color: var(--text-secondary);">Assets Used in Experiments Under This Stage</h4>
+                            ${allUsage.map(u => `
+                                <div style="padding: 6px 0; border-bottom: 1px solid var(--border-color);">
+                                    <div style="font-size: 13px; font-weight: 500;">${u.entity_type || 'Item'} ${u.entity_id || ''}</div>
+                                    <div style="font-size: 12px; color: var(--text-muted);">Qty: ${u.quantity_used || ''} ${u.unit || ''} — ${u.post_use_status || ''}</div>
+                                </div>
+                            `).join('')}
+                        </div>`;
+                    }
+                } else {
+                    nbUrl = experimentId ? `/api/notebook?experiment_id=${experimentId}` : '/api/notebook';
+                    const nbResp = await apiFetch(nbUrl);
+                    const nbData = await nbResp.json();
+                    const entries = nbData.entries || [];
+                    notebookOptions = entries.map(e => ({ value: e.id, label: e.title }));
+                }
             } catch (e) {
                 notebookOptions = [];
             }
@@ -3183,13 +3470,13 @@ async function showTimelineEventDetails(type, id, experimentId) {
                 { name: 'owner', label: 'Owner', type: 'text', defaultValue: item.owner || ev.owner || '' },
                 { name: 'start_time', label: 'Start date', type: 'text', defaultValue: item.start_time || ev.timestamp || '' },
                 { name: 'end_time', label: 'End date', type: 'text', defaultValue: item.end_time || '' },
-                { name: 'attachments', label: 'Attachments', type: 'docpicker', defaultValue: documentDefault, placeholder: 'Pick from device or resources' },
+                { name: 'attachments', label: 'Attachments', type: 'docpicker', defaultValue: documentDefault, placeholder: 'Pick from device or resources', stageContext: { isProjectStage, stageId: id, projectId: currentProjectId } },
                 { name: 'linked_note_id', label: 'Link Note', type: 'select', options: notebookOptions, defaultValue: item.linked_note_id || '' },
                 { name: 'notes', label: 'Notes', type: 'textarea', defaultValue: item.notes || ev.details || '', rows: 6 }
             ];
 
             showModal({
-                type: 'multi', title: title, message: '', fields: fields, callback: async (values) => {
+                type: 'multi', title: title, message: stageUsageHtml, fields: fields, callback: async (values) => {
                     if (!values) return;
                     const payload = {
                         stage_name: values.stage_name,
@@ -3227,13 +3514,22 @@ async function showTimelineEventDetails(type, id, experimentId) {
             });
         } else {
             // usage
-            // Fetch stages for the experiment to allow tying usage to a specific stage
+            // Fetch stages for the experiment or project to allow tying usage to a specific stage
             let stageOptions = [];
             try {
-                const stResp = await apiFetch(`/api/experiment_stages?experiment_id=${experimentId}&limit=200`);
-                const stData = await stResp.json();
-                const stList = (stData && stData.data) ? stData.data : [];
-                stageOptions = stList.map(s => ({ value: s.id, label: s.stage_name }));
+                if (isProjectStage) {
+                    // For project stages, show project stages as options
+                    const stResp = await apiFetch(`/api/project_stages?project_id=${currentProjectId}&limit=200`);
+                    const stData = await stResp.json();
+                    const stList = (stData && stData.data) ? stData.data : [];
+                    stageOptions = stList.map(s => ({ value: s.id, label: s.stage_name }));
+                } else {
+                    // For experiment stages, show experiment stages
+                    const stResp = await apiFetch(`/api/experiment_stages?experiment_id=${experimentId}&limit=200`);
+                    const stData = await stResp.json();
+                    const stList = (stData && stData.data) ? stData.data : [];
+                    stageOptions = stList.map(s => ({ value: s.id, label: s.stage_name }));
+                }
             } catch (e) {
                 stageOptions = [];
             }
@@ -3438,7 +3734,7 @@ async function createExperimentUnderStage(stageId) {
         log_text: result.description || '',
         expected_outcome: result.expected_outcome || '',
         outcome: 'PENDING',
-        stage_id: Number(stageId)
+        project_stage_id: Number(stageId)
     };
     if (currentProjectId) {
         payload.project_id = currentProjectId;
@@ -3471,14 +3767,14 @@ let isGridView = true;
 
 async function loadDocuments() {
     try {
-        // Fetch documents
-        const docUrl = currentProjectId ? `/api/documents?project_id=${currentProjectId}` : '/api/documents';
-        const docResponse = await apiFetch(docUrl);
+        // Resources page ALWAYS shows ALL documents (never scoped by project/stage).
+        // Project/stage-specific views use their own scoped loaders (loadProjectDocuments,
+        // loadStageDocuments). Mixing scopes here caused double-file and stale-delete bugs.
+        const docResponse = await apiFetch('/api/documents');
         const docData = await docResponse.json();
 
-        // Fetch notebook entries
-        const notebookUrl = currentProjectId ? `/api/notebook?project_id=${currentProjectId}` : '/api/notebook';
-        const notebookResponse = await apiFetch(notebookUrl);
+        // Fetch notebook entries (also global)
+        const notebookResponse = await apiFetch('/api/notebook');
         const notebookData = await notebookResponse.json();
 
         // Combine documents and notes
@@ -4265,15 +4561,33 @@ async function uploadDocument(file) {
         // Use dedicated IPC upload handler
         const response = await window.electronAPI.uploadFile(formDataFields);
 
-        const data = await response.json();
-        showAlert('Document uploaded successfully', 'Success');
-        loadDocuments();
-        refreshDashboardInBackground();
+        // IPC returns a plain object {ok, status, body}, NOT a Response object
+        if (!response.ok) {
+            const errBody = typeof response.body === 'string' ? JSON.parse(response.body) : response.body;
+            throw new Error(errBody?.detail || 'Upload failed');
+        }
 
-        // Refresh current page content for instant feedback
-        setTimeout(() => {
-            refreshCurrentPage();
-        }, 500);
+        showAlert('Document uploaded successfully', 'Success');
+
+        // Refresh the correct scoped view depending on context.
+        // We deliberately do NOT call loadDocuments() here when inside a workspace
+        // because loadDocuments() renders the global Resources grid — calling it from
+        // inside a project/stage would either corrupt Resources (showing scoped docs
+        // there) or cause a confusing flash. Each workspace refreshes its own list.
+        if (currentStageId) {
+            // Inside a stage — refresh stage document list
+            loadStageDocuments(currentStageId);
+        } else if (currentProjectId) {
+            // Inside a project workspace — refresh project document tab
+            if (document.getElementById('project-documents-list')) {
+                loadProjectDocuments(currentProjectId);
+            }
+        } else {
+            // On the global Resources page — refresh the full list
+            await loadDocuments();
+        }
+
+        refreshDashboardInBackground();
     } catch (error) {
         console.error('Error uploading document:', error);
         showAlert('Error uploading document', 'Error');
@@ -4301,6 +4615,8 @@ async function fileToBase64(file) {
 async function uploadFolder(files) {
     let uploadedCount = 0;
     let failedCount = 0;
+
+    showAlert('Starting folder upload...', 'Info');
 
     for (let i = 0; i < files.length; i++) {
         const file = files[i];
@@ -4332,15 +4648,23 @@ async function uploadFolder(files) {
         }
 
         try {
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('title', title);
-            formData.append('file_type', file_type);
+            // Convert file to base64 for IPC transfer
+            const fileData = await fileToBase64(file);
 
-            const response = await apiFetch('http://127.0.0.1:8000/api/documents', {
-                method: 'POST',
-                body: formData
-            });
+            // Prepare form data fields
+            const formDataFields = {
+                title: title,
+                file_type: file_type,
+                file_name: file.name,
+                file_data: fileData
+            };
+
+            if (currentProjectId) {
+                formDataFields.project_id = currentProjectId;
+            }
+
+            // Use dedicated IPC upload handler
+            const response = await window.electronAPI.uploadFile(formDataFields);
 
             if (response.ok) {
                 uploadedCount++;
@@ -4367,9 +4691,13 @@ async function deleteDocument(id) {
     try {
         const response = await apiFetch(`/api/documents/${id}`, { method: 'DELETE' });
         if (response.ok) {
+            // Always refresh global Resources so the deletion is reflected there
             loadDocuments();
+            // If inside a project workspace, also refresh the project documents tab
+            if (currentProjectId && document.getElementById('project-documents-list')) {
+                loadProjectDocuments(currentProjectId);
+            }
             refreshDashboardInBackground();
-            refreshCurrentPage();
         }
     } catch (error) {
         console.error('Error deleting document:', error);
@@ -7402,16 +7730,20 @@ function showModal(options) {
                         const uploadedIds = [];
                         for (let i = 0; i < fileInput.files.length; i++) {
                             const f = fileInput.files[i];
-                            const form = new FormData();
-                            form.append('file', f);
-                            form.append('title', f.name);
                             const ext = f.name.split('.').pop().toLowerCase();
-                            form.append('file_type', ext);
                             try {
-                                const resp = await fetch('http://127.0.0.1:8000/api/documents', { method: 'POST', body: form });
-                                if (resp.ok) {
-                                    const data = await resp.json();
-                                    if (data && data.id) uploadedIds.push(data.id);
+                                const fileData = await fileToBase64(f);
+                                const formDataFields = {
+                                    title: f.name,
+                                    file_type: ext,
+                                    file_name: f.name,
+                                    file_data: fileData
+                                };
+                                const response = await window.electronAPI.uploadFile(formDataFields);
+                                if (response.ok) {
+                                    const responseData = typeof response.body === 'string' ? JSON.parse(response.body) : response.body;
+                                    const docId = responseData.id || (responseData.data && responseData.data.id);
+                                    if (docId) uploadedIds.push(docId);
                                 }
                             } catch (e) {
                                 console.error('Error uploading file from docpicker:', e);
@@ -7422,18 +7754,55 @@ function showModal(options) {
 
                     // Populate resources list asynchronously
                     try {
-                        apiFetch('/api/documents').then(async (r) => {
-                            try {
-                                const data = await r.json();
-                                const docs = data.documents || [];
-                                docs.forEach(doc => {
-                                    const opt = document.createElement('option');
-                                    opt.value = String(doc.id);
-                                    opt.textContent = `${doc.title} (${doc.id})`;
-                                    resourcesSelect.appendChild(opt);
-                                });
-                            } catch (ee) { console.error('Error parsing docs for docpicker', ee); }
-                        }).catch(err => { console.error('Error fetching docs for docpicker', err); });
+                        let docsUrl = '/api/documents';
+                        // If this is a project stage, fetch documents from all experiments under this stage
+                        if (field.stageContext && field.stageContext.isProjectStage) {
+                            // Fetch experiments under this stage and aggregate their documents
+                            (async () => {
+                                try {
+                                    const expResp = await apiFetch(`/api/logs?project_id=${field.stageContext.projectId}&limit=200`);
+                                    const expData = await expResp.json();
+                                    const experiments = (expData && expData.data) ? expData.data : [];
+                                    const experimentsInStage = experiments.filter(e => e.stage_id === field.stageContext.stageId);
+                                    
+                                    // Fetch documents for each experiment in this stage
+                                    const allDocs = [];
+                                    for (const exp of experimentsInStage) {
+                                        try {
+                                            const docResp = await apiFetch(`/api/documents?experiment_id=${exp.id}`);
+                                            const docData = await docResp.json();
+                                            const docs = docData.documents || [];
+                                            allDocs.push(...docs);
+                                        } catch (e) {
+                                            // Continue if one experiment fails
+                                        }
+                                    }
+                                    
+                                    // Populate with aggregated documents
+                                    allDocs.forEach(doc => {
+                                        const opt = document.createElement('option');
+                                        opt.value = String(doc.id);
+                                        opt.textContent = `${doc.title} (${doc.id})`;
+                                        resourcesSelect.appendChild(opt);
+                                    });
+                                } catch (e) {
+                                    console.error('Error fetching aggregated docs for project stage:', e);
+                                }
+                            })();
+                        } else {
+                            apiFetch(docsUrl).then(async (r) => {
+                                try {
+                                    const data = await r.json();
+                                    const docs = data.documents || [];
+                                    docs.forEach(doc => {
+                                        const opt = document.createElement('option');
+                                        opt.value = String(doc.id);
+                                        opt.textContent = `${doc.title} (${doc.id})`;
+                                        resourcesSelect.appendChild(opt);
+                                    });
+                                } catch (ee) { console.error('Error parsing docs for docpicker', ee); }
+                            }).catch(err => { console.error('Error fetching docs for docpicker', err); });
+                        }
                     } catch (e) { }
 
                     fieldsContainer.appendChild(pickerDiv);

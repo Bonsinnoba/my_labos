@@ -60,6 +60,7 @@ CREATE POLICY projects_update ON projects FOR UPDATE TO authenticated USING (tru
 CREATE TABLE IF NOT EXISTS rd_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id UUID,
+    project_stage_id UUID,
     project_name TEXT,
     log_title TEXT NOT NULL,
     log_text TEXT,
@@ -78,12 +79,14 @@ CREATE TABLE IF NOT EXISTS rd_logs (
     is_tombstone INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL,
+    FOREIGN KEY (project_stage_id) REFERENCES project_stages(id) ON DELETE SET NULL
 );
 
 CREATE INDEX idx_rd_logs_updated_at ON rd_logs(updated_at);
 CREATE INDEX idx_rd_logs_project ON rd_logs(project_name);
 CREATE INDEX idx_rd_logs_project_id ON rd_logs(project_id);
+CREATE INDEX idx_rd_logs_project_stage_id ON rd_logs(project_stage_id);
 CREATE INDEX idx_rd_logs_downloaded ON rd_logs(is_downloaded_locally);
 CREATE INDEX idx_rd_logs_stage_id ON rd_logs(stage_id);
 ALTER TABLE rd_logs ENABLE ROW LEVEL SECURITY;

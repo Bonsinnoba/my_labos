@@ -1958,7 +1958,8 @@ async def create_experiment(data: Dict[str, Any]):
             log_text=data.get('findings', ''),
             status=data.get('status', 'PENDING'),
             expected_outcome=data.get('expected_outcome'),
-            actual_outcome=data.get('actual_outcome')
+            actual_outcome=data.get('actual_outcome'),
+            project_stage_id=data.get('project_stage_id')
         )
         return {
             'id': log_id,

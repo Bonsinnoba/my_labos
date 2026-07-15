@@ -49,7 +49,8 @@ class CacheDatabase:
                     model TEXT,
                     status TEXT NOT NULL DEFAULT 'available',
                     calibration_date TEXT,
-                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_tombstone INTEGER DEFAULT 0
                 )
             """)
             
@@ -63,6 +64,7 @@ class CacheDatabase:
                     start_date TEXT,
                     summary_findings TEXT,
                     project_outcome TEXT,
+                    is_tombstone INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
@@ -72,6 +74,7 @@ class CacheDatabase:
                 CREATE TABLE IF NOT EXISTS rd_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     project_id INTEGER,
+                    project_stage_id INTEGER,
                     project_name TEXT,
                     log_title TEXT NOT NULL,
                     log_text TEXT,
@@ -79,7 +82,9 @@ class CacheDatabase:
                     is_downloaded_locally INTEGER DEFAULT 0,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     status TEXT DEFAULT 'Active',
-                    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+                    is_tombstone INTEGER DEFAULT 0,
+                    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL,
+                    FOREIGN KEY (project_stage_id) REFERENCES project_stages(id) ON DELETE SET NULL
                 )
             """)
             
@@ -117,6 +122,9 @@ class CacheDatabase:
             
             # Migration: Add stage_id column to rd_logs so experiments can be linked to stages
             self._migrate_rd_logs_add_stage_id(cursor)
+            
+            # Migration: Add project_stage_id column to rd_logs for nesting experiments within project stages
+            self._migrate_rd_logs_add_project_stage_id(cursor)
             
             # Migration: Add status column to rd_logs for pause/continue functionality
             self._migrate_rd_logs_add_status(cursor)
@@ -212,6 +220,26 @@ class CacheDatabase:
                 print("[db] rd_logs table already has stage_id column")
         except sqlite3.Error as e:
             print(f"[db] Migration warning (stage_id): {e}")
+
+    def _migrate_rd_logs_add_project_stage_id(self, cursor: sqlite3.Cursor) -> None:
+        """
+        Migrate existing rd_logs table to include project_stage_id column for nesting experiments within project stages.
+        """
+        try:
+            cursor.execute("PRAGMA table_info(rd_logs)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'project_stage_id' not in columns:
+                print("[db] Migrating rd_logs table: adding project_stage_id column...")
+                cursor.execute("ALTER TABLE rd_logs ADD COLUMN project_stage_id INTEGER")
+                try:
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_rd_logs_project_stage_id ON rd_logs(project_stage_id)")
+                except sqlite3.Error:
+                    pass
+                print("[db] Migration complete: project_stage_id column added")
+            else:
+                print("[db] rd_logs table already has project_stage_id column")
+        except sqlite3.Error as e:
+            print(f"[db] Migration warning (project_stage_id): {e}")
     
     def _migrate_rd_logs_add_status(self, cursor: sqlite3.Cursor) -> None:
         """
@@ -382,6 +410,7 @@ class CacheDatabase:
                 stage_id INTEGER,
                 upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_accessed TIMESTAMP,
+                is_tombstone INTEGER DEFAULT 0,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL,
                 FOREIGN KEY (component_id) REFERENCES components(id) ON DELETE SET NULL,
                 FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE SET NULL
@@ -400,6 +429,8 @@ class CacheDatabase:
                 tags TEXT,
                 attachments TEXT,
                 voice_transcription TEXT,
+                source TEXT DEFAULT 'pc',
+                is_tombstone INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
@@ -420,6 +451,7 @@ class CacheDatabase:
                 supplier TEXT,
                 supplier_part_number TEXT,
                 notes TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -436,6 +468,7 @@ class CacheDatabase:
                 next_due_date TEXT,
                 performed_by TEXT,
                 notes TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE
             )
         """)
@@ -455,8 +488,9 @@ class CacheDatabase:
                 stage_id INTEGER,
                 severity TEXT DEFAULT 'medium',
                 status TEXT DEFAULT 'open',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 resolved_at TIMESTAMP,
+                is_tombstone INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
             )
         """)
@@ -472,6 +506,7 @@ class CacheDatabase:
                 formula TEXT,
                 project_id INTEGER,
                 component_id INTEGER,
+                is_tombstone INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL,
                 FOREIGN KEY (component_id) REFERENCES components(id) ON DELETE SET NULL
@@ -488,6 +523,7 @@ class CacheDatabase:
                 target_id INTEGER NOT NULL,
                 relationship_type TEXT NOT NULL,
                 confidence REAL DEFAULT 1.0,
+                is_tombstone INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(source_type, source_id, target_type, target_id, relationship_type)
             )
@@ -503,6 +539,7 @@ class CacheDatabase:
                 quantity_used INTEGER DEFAULT 1,
                 usage_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 notes TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 FOREIGN KEY (component_id) REFERENCES components(id) ON DELETE CASCADE,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
             )
@@ -522,6 +559,7 @@ class CacheDatabase:
                 purchase_date TEXT,
                 supplier TEXT,
                 notes TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -541,6 +579,7 @@ class CacheDatabase:
                 purchase_date TEXT,
                 supplier TEXT,
                 notes TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -561,6 +600,7 @@ class CacheDatabase:
                 condition_notes TEXT,
                 efficiency_percentage REAL,
                 notes TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 FOREIGN KEY (equipment_id) REFERENCES equipment(id) ON DELETE CASCADE,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
             )
@@ -580,6 +620,7 @@ class CacheDatabase:
                 condition_notes TEXT,
                 efficiency_percentage REAL,
                 notes TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 FOREIGN KEY (tool_id) REFERENCES tools(id) ON DELETE CASCADE,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
             )
@@ -598,6 +639,7 @@ class CacheDatabase:
                 post_use_status TEXT DEFAULT 'usable',
                 condition_notes TEXT,
                 notes TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
             )
@@ -619,6 +661,7 @@ class CacheDatabase:
                 notes TEXT,
                 user_id INTEGER DEFAULT 1,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_tombstone INTEGER DEFAULT 0,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL,
                 FOREIGN KEY (stage_id) REFERENCES experiment_stages(id) ON DELETE SET NULL
             )
@@ -636,6 +679,7 @@ class CacheDatabase:
                 status TEXT DEFAULT 'not_started',
                 notes TEXT,
                 attachments TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
                 UNIQUE(project_id, stage_name)
@@ -1201,7 +1245,8 @@ class CacheDatabase:
                    expected_outcome: Optional[str] = None,
                    actual_outcome: Optional[str] = None,
                    findings: Optional[str] = None,
-                   conclusion: Optional[str] = None) -> int:
+                   conclusion: Optional[str] = None,
+                   project_stage_id: Optional[int] = None) -> int:
         """
         Add a new R&D log entry to the database.
 
@@ -1217,6 +1262,7 @@ class CacheDatabase:
             actual_outcome: Actual outcome of the experiment
             findings: Ongoing observations/findings during the experiment
             conclusion: Final narrative conclusion of the experiment
+            project_stage_id: Optional project stage ID to link the experiment within a project stage
 
         Returns:
             The ID of the inserted log entry
@@ -1225,11 +1271,11 @@ class CacheDatabase:
             cursor = self.conn.cursor()
             cursor.execute("""
                 INSERT INTO rd_logs
-                    (project_name, project_id, stage_id, log_title, log_text,
+                    (project_name, project_id, project_stage_id, stage_id, log_title, log_text,
                      cloud_file_url, is_downloaded_locally, outcome, expected_outcome,
                      actual_outcome, findings, conclusion)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (project_name, project_id, stage_id, log_title, log_text,
+            """, (project_name, project_id, project_stage_id, stage_id, log_title, log_text,
                    cloud_file_url, int(is_downloaded_locally), outcome.upper(),
                    expected_outcome, actual_outcome, findings, conclusion))
             self.conn.commit()
@@ -1238,6 +1284,7 @@ class CacheDatabase:
             self._log_mutation('rd_logs', 'INSERT', {
                 'project_name': project_name,
                 'project_id': project_id,
+                'project_stage_id': project_stage_id,
                 'stage_id': stage_id,
                 'log_title': log_title,
                 'log_text': log_text,
