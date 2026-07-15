@@ -698,6 +698,7 @@ class CacheDatabase:
                 status TEXT DEFAULT 'not_started',
                 notes TEXT,
                 attachments TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (experiment_id) REFERENCES rd_logs(id) ON DELETE CASCADE,
                 UNIQUE(experiment_id, stage_name)
@@ -720,6 +721,7 @@ class CacheDatabase:
                 current_balance REAL DEFAULT 0,
                 account_number TEXT,
                 contact_person TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -739,6 +741,7 @@ class CacheDatabase:
                 invoice_number TEXT,
                 payment_method TEXT,
                 notes TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (funding_source_id) REFERENCES funding_sources(id) ON DELETE SET NULL
             )
@@ -758,6 +761,7 @@ class CacheDatabase:
                 description TEXT,
                 invoice_number TEXT,
                 notes TEXT,
+                is_tombstone INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (funding_source_id) REFERENCES funding_sources(id) ON DELETE SET NULL
             )
@@ -777,6 +781,7 @@ class CacheDatabase:
                 project_id INTEGER,
                 category TEXT,
                 status TEXT DEFAULT 'confirmed',
+                is_tombstone INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (funding_source_id) REFERENCES funding_sources(id) ON DELETE SET NULL
             )
@@ -792,7 +797,8 @@ class CacheDatabase:
                 entity_name TEXT,
                 user_id INTEGER DEFAULT 1,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                details TEXT
+                details TEXT,
+                is_tombstone INTEGER DEFAULT 0
             )
         """)
         
@@ -802,7 +808,8 @@ class CacheDatabase:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_name TEXT NOT NULL,
                 action_type TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_tombstone INTEGER DEFAULT 0
             )
         """)
         
@@ -815,7 +822,8 @@ class CacheDatabase:
                 content TEXT NOT NULL,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 project_id INTEGER,
-                experiment_id INTEGER
+                experiment_id INTEGER,
+                is_tombstone INTEGER DEFAULT 0
             )
         """)
         
@@ -1274,7 +1282,7 @@ class CacheDatabase:
                     (project_name, project_id, project_stage_id, stage_id, log_title, log_text,
                      cloud_file_url, is_downloaded_locally, outcome, expected_outcome,
                      actual_outcome, findings, conclusion)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (project_name, project_id, project_stage_id, stage_id, log_title, log_text,
                    cloud_file_url, int(is_downloaded_locally), outcome.upper(),
                    expected_outcome, actual_outcome, findings, conclusion))

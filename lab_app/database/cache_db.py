@@ -1286,7 +1286,7 @@ class CacheDatabase:
                     (project_name, project_id, project_stage_id, stage_id, log_title, log_text,
                      cloud_file_url, is_downloaded_locally, outcome, expected_outcome,
                      actual_outcome, findings, conclusion)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (project_name, project_id, project_stage_id, stage_id, log_title, log_text,
                    cloud_file_url, int(is_downloaded_locally), outcome.upper(),
                    expected_outcome, actual_outcome, findings, conclusion))
